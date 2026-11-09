@@ -18,7 +18,7 @@ shrek is listening. type expenses ('ate pizza 200 rupees'), 'help', or 'exit'.
 
 | Surface | What it is | Ledger |
 |---|---|---|
-| `shrek` | Conversational checker plus `add/list/total/delete/undo` | your machine's `~/.shrek/ledger.db` |
+| `shrek` | Conversational checker plus `add/list/total/delete/undo/organize` | your machine's `~/.shrek/ledger.db` |
 | `shrek-bot` | Telegram bot, locked to exactly one owner (you) | SQLite at `SHREK_DB_PATH` (`/data/ledger.db` in Docker) |
 
 Self-host semantics: every person runs and owns their own shrek (own bot
@@ -38,10 +38,15 @@ shrek total            # totals per currency, never franken-summed
 shrek total food month # category and period filters combine
 shrek undo             # spit the last one back out
 shrek delete 3
+shrek organize         # re-categorize every miscellaneous row in one Gemini call
+shrek organize --dry-run  # preview the changes, write nothing
+# in the REPL: list | total | undo | organize | categories | exit
 ```
 
 No key? `shrek` still works -- the regex brain parses plain `<number> rupees`
-lines (or `$`/`€`/`£` amounts) and tells you when a line is beyond it. The
+lines (or `$`/`€`/`£` amounts) and tells you when a line is beyond it. Those
+rows land in `miscellaneous`, and `shrek organize` needs a key to move them.
+The
 LLM catches the messy wording.
 
 ## Changing the model (or key)
@@ -83,7 +88,8 @@ docker run -d --name my-shrek \
    **Undo** and **Change category** buttons (both act on that exact row).
 6. `/key <gemini-key>` turns the smart brain on right from chat -- it is
    written to `/data/.env`, so it survives restarts. `/forgetkey` turns
-   it off again.
+   it off again. `/organize` re-categorizes every `miscellaneous` row in
+   one Gemini call and replies with a capped summary.
 
 Any other Telegram user who messages your bot only ever hears:
 
@@ -94,15 +100,21 @@ Any other Telegram user who messages your bot only ever hears:
 
 1. **Smart brain** (Gemini, structured JSON response schema): amount,
    currency, category from the fixed preset
-   (food, groceries, transport, rent, bills, shopping, health, fun, travel, other),
-   cleaned description. Income/refund verdicts are terminal -- refunds are
-   never swallowed as debits. v1 is debit-only.
+   (food, groceries, transport, rent, bills, shopping, health, fun, travel,
+   other, miscellaneous), cleaned description. `miscellaneous` means "the
+   brain could not decide"; `other` is a confident catch-all. Income/refund
+   verdicts are terminal -- refunds are never swallowed as debits. v1 is
+   debit-only.
 2. **Regex brain**: `200 rupees`, `₹200`, `$5`, `12,50 EUR`, `50 paise`
    -- deterministic and exhaustively tested. Comma rules: `12,50` is a
    decimal comma, `2,450` a thousands grouping, `12,50,000` lakh grouping.
 3. **The ledger**: SQLite via SQLModel. Currencies are recorded as-written
-   and never converted; `total` sums per currency; period windows
-   (`today | week | month`) follow your local calendar.
+   and never converted; `total` sums per currency in SQL; period windows
+   (`today | week | month`) follow your local calendar. Each row records
+   `category_source` (`llm | regex | manual | organized | unknown`).
+4. **Upgrading** from a pre-organize build runs a one-time migration:
+   `category_source` is added, legacy `other` rows are deleted, and
+   `PRAGMA user_version` moves to 1.
 
 ## Tests
 
