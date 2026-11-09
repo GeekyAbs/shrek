@@ -1,63 +1,76 @@
-# 🧅 shrek — the ogre that swallows your expenses
+# shrek -- the ogre that swallows your expenses
 
-Talk to shrek like a person; it keeps receipts.
+Talk to shrek like a person; it keeps receipts. An LLM organizes the messy
+lines (your own Gemini API key), a deterministic parser handles the simple
+ones, and bad input never crashes it.
 
 ```console
 $ shrek
-🧅 > ate pizza 200 rupees
-✅ food · INR 200 — ate pizza
+shrek is listening. type expenses ('ate pizza 200 rupees'), 'help', or 'exit'.
+> ate pizza 200 rupees
++ food · INR 200 -- ate pizza
 
-🧅 > had coffee 30 rupees
-✅ other · INR 30 — had coffee
+> groceries 450.25 ts
++ groceries · INR 450.25 -- groceries ts
 ```
-
-No round numbers? No clean categories? Shrek's **smart brain** (your own
-Gemini API key) organizes the messy lines into amounts, currencies and
-preset categories. **Offline? No key? Quota burnt?** Shrek still swallows
-plain lines like `200 rupees` with a built-in deterministic parser — it
-never crashes on bad input, it just doesn't guess.
 
 ## The two shreks in one package
 
-| Surface | What it is | Where the ledger lives |
+| Surface | What it is | Ledger |
 |---|---|---|
-| `shrek` | Conversational CLI + classic `add/list/total/delete/undo` | your machine's `~/.shrek/ledger.db` |
-| `shrek-bot` | Telegram bot twin, **locked to exactly one owner** (you) | SQLite file in the container's `/data` |
+| `shrek` | Conversational checker plus `add/list/total/delete/undo` | your machine's `~/.shrek/ledger.db` |
+| `shrek-bot` | Telegram bot, locked to exactly one owner (you) | SQLite at `SHREK_DB_PATH` (`/data/ledger.db` in Docker) |
 
-Per the self-hosted ethos: **every person hosts and owns their own shrek**
-(own bot token, own DB, own Gemini key — BYOK — so nobody pays for a
-stranger's tokens). Shrek's public deployments are exactly as private as
-their owner keeps them.
+Self-host semantics: every person runs and owns their own shrek (own bot
+token, own database, own Gemini key), so nobody pays for anyone's tokens
+and no stranger ever writes to your swamp.
 
-## CLI quickstart
+## Quickstart (CLI)
 
 ```console
-# install (uv)
 uv tool install .
+shrek setup            # interactive: saves GEMINI_API_KEY + GEMINI_MODEL to ~/.shrek/.env (0600)
+shrek                  # opens the REPL; or one-shot commands below
 
-# first run walks you through key + model choice (saved to ~/.shrek/config.toml, 0600)
-shrek
-
-# or one-shot commands
 shrek add "delivery 450 rupees"
 shrek list
-shrek total                # grand totals, per currency, never franken-summed
-shrek total food month     # category + period filters combine
-shrek undo                 # spat the last one back out
+shrek total            # totals per currency, never franken-summed
+shrek total food month # category and period filters combine
+shrek undo             # spit the last one back out
 shrek delete 3
 ```
 
-Inside the REPL the same words work too (`list`, `total`, `undo`, `exit`).
+No key? `shrek` still works -- the regex brain parses plain `<number> rupees`
+lines (or `$`/`€`/`£` amounts) and tells you when a line is beyond it. The
+LLM catches the messy wording.
 
-No key? `shrek` works without one — the regex brain handles plain
-`<amount> rupees/$/€/£` lines and tells you when a line is beyond it.
+## Changing the model (or key)
+
+Configuration is just environment variables -- they pick up everywhere
+(CLI, REPL, bot), in this precedence: **real environment > `$SHREK_HOME/.env`**:
+
+```console
+# everywhere, this shell or profile
+export GEMINI_API_KEY=...          # the key
+export GEMINI_MODEL=gemini-3.8-flash
+
+# or just edit the generated file
+$EDITOR ~/.shrek/.env              # SHREK_HOME=/data inside the container
+```
+
+Or: `shrek model` shows the current model and the live list from your key;
+`shrek model gemini-3.8-flash-lite` writes GEMINI_MODEL to `~/.shrek/.env`.
+
+Inside the Docker bot, edit `/data/.env` (same volume as the ledger) and
+restart the container.
 
 ## Host your own Telegram shrek (one container)
 
-1. Create a bot with [@BotFather](https://t.me/BotFather), get its token.
-2. Find your numeric Telegram id (e.g. message `@userinfobot`).
-3. `cp .env.example .env`, fill in `TELEGRAM_BOT_TOKEN`, `SHREK_OWNER_ID`.
-4. Build + run — the ledger persists in a named volume:
+1. Create a bot with @BotFather, note the token.
+2. Find your numeric Telegram id (e.g. message @userinfobot).
+3. `cp .env.example .env` and fill `TELEGRAM_BOT_TOKEN`, `SHREK_OWNER_ID`
+   (and optionally `GEMINI_API_KEY`, `GEMINI_MODEL`).
+4. Build and run -- ledger and `.env-copied key persist in the volume:
 
 ```console
 docker build -t shrek .
@@ -66,30 +79,30 @@ docker run -d --name my-shrek \
   shrek
 ```
 
-5. DM your bot: `/start`, then `had coffee 30 rupees`. Every swallow comes
-   back with **Undo** and **Change category** inline buttons (both act on
-   that exact row).
-6. Send `/key <your-gemini-key>` whenever you want the smart brain on that
-   instance (BYOK — your key, your tokens). It persists in `/data`
-   (the same volume as the ledger), across container restarts.
-   `/forgetkey` turns it off again.
+5. DM the bot: `/start`, then `had coffee 30 rupees`. Each swallow gets
+   **Undo** and **Change category** buttons (both act on that exact row).
+6. `/key <gemini-key>` turns the smart brain on right from chat -- it is
+   written to `/data/.env`, so it survives restarts. `/forgetkey` turns
+   it off again.
 
 Any other Telegram user who messages your bot only ever hears:
 
-> 🧅 this swamp is taken — it belongs to its owner only. Run your own shrek:
-> <repo-link>
+> this swamp is taken -- it belongs to its owner only. Run your own shrek
+> at https://github.com/YOURNAME/shrek
 
 ## How a line becomes a ledger row
 
 1. **Smart brain** (Gemini, structured JSON response schema): amount,
    currency, category from the fixed preset
    (food, groceries, transport, rent, bills, shopping, health, fun, travel, other),
-   cleaned description. Income/refund lines are rejected — v1 is debit-only.
-2. **Regex brain**: `200 rupees` / `₹200` / `$5` / `12,450 EUR` …
-   deterministic and exhaustively tested.
-3. **The ledger**: SQLite (via SQLModel). Currencies are recorded
-   as-written and never converted; `total` sums per currency, period
-   windows are local-calendar (`today | week | month`).
+   cleaned description. Income/refund verdicts are terminal -- refunds are
+   never swallowed as debits. v1 is debit-only.
+2. **Regex brain**: `200 rupees`, `₹200`, `$5`, `12,50 EUR`, `50 paise`
+   -- deterministic and exhaustively tested. Comma rules: `12,50` is a
+   decimal comma, `2,450` a thousands grouping, `12,50,000` lakh grouping.
+3. **The ledger**: SQLite via SQLModel. Currencies are recorded as-written
+   and never converted; `total` sums per currency; period windows
+   (`today | week | month`) follow your local calendar.
 
 ## Tests
 
@@ -97,25 +110,24 @@ Any other Telegram user who messages your bot only ever hears:
 uv run pytest
 ```
 
-The exhaustive matrix lives in `tests/test_parser.py` (regex brain) and
+Exhaustive matrix in `tests/test_parser.py` (regex brain) and
 `tests/test_store.py` (ledger). Telegram wiring is smoke-tested manually by
-design (locked single instance = tiny blast radius).
+design (locked single-owner = tiny blast radius).
 
 ## Config reference
 
-`~/.shrek/config.toml` (CLI + bot owner key):
+Variables (same names everywhere):
 
-```toml
-gemini_key = "..."      # BYOK; never echoed, 0600 on the file
-model = "gemini-2.5-flash"
+```console
+GEMINI_API_KEY=...            # BYOK; never rotated into logs, file saved 0600
+GEMINI_MODEL=gemini-3.8-flash # any Gemini generateContent model id
+SHREK_HOME=~/.shrek           # relocate ledger + .env (set in Docker to /data)
+SHREK_DB_PATH=/data/ledger.db # bot ledger only
+SHREK_OWNER_ID=123456789      # bot access lock
+TELEGRAM_BOT_TOKEN=...        # from BotFather
 ```
-
-`SHREK_HOME` relocates the whole `~/.shrek` home (handy for tests).
-
-Bot env (`.env`): `TELEGRAM_BOT_TOKEN`, `SHREK_OWNER_ID`, `SHREK_DB_PATH`
-(default `/data/ledger.db` in Docker, `./shrek.db` natively).
 
 ## Why "shrek"
 
-Ogres have layers — like an expense line. Also, they eat everything and
-keep the receipt. 🧅
+Ogres have layers -- like an expense line. Also, they eat everything and
+keep the receipt.

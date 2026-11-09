@@ -35,7 +35,7 @@ MISSING_CONFIG = (
     "cp .env.example .env, then paste your BotFather token + your numeric Telegram id."
 )
 STRANGER_REPLY = (
-    "🧅 this swamp is taken — it belongs to its owner only.\n"
+    "this swamp is taken — it belongs to its owner only.\n"
     "run your own shrek: " + REPO_LINK
 )
 
@@ -57,8 +57,8 @@ class Bot:
         self.owner_key = key
         self.model = config.model() if key else None
         if key:
-            return "🧅 smart brain online: lines with messy wording will parse well now."
-        return "🧅 smart brain off. I will still catch plain 'X rupees' lines."
+            return "smart brain online: lines with messy wording will parse well now."
+        return "smart brain off. I will still catch plain 'X rupees' lines."
 
     # -- gating ----------------------------------------------------------
 
@@ -73,7 +73,7 @@ class Bot:
         row, not on whatever is newest when pressed."""
         entry = parse(text, key=self.owner_key, model=self.model)
         if entry is None:
-            return ("🧅 I did not get that — I swallow expenses. "
+            return ("I did not get that — I swallow expenses. "
                     "Try like: had coffee 30 rupees  (/help)"), None
         expense = Expense(
             amount=entry.amount,
@@ -85,7 +85,7 @@ class Bot:
         with GLOBAL_LOCK:
             expense.id = self.store.add(expense)
         note = "" if self.owner_key else " · /key to use your Gemini key"
-        body = f"✅ {expense.category} · {expense.currency} {fmt_amount(expense.amount)}"
+        body = f"+ {expense.category} · {expense.currency} {fmt_amount(expense.amount)}"
         if expense.description:
             body += f" — {expense.description}"
         return body + note, expense.id
@@ -95,11 +95,11 @@ class Bot:
             return STRANGER_REPLY, None
         row = self.store.get(expense_id)
         if row is None:
-            return "🧅 that one is already gone from the swamp.", None
+            return "that one is already gone from the swamp.", None
         with GLOBAL_LOCK:
             self.store.delete(expense_id)
         desc = row.description or f"#{row.id}"
-        return f"🧅 spat it back out: {desc} · {row.currency} {fmt_amount(row.amount)}", None
+        return f"spat it back out: {desc} · {row.currency} {fmt_amount(row.amount)}", None
 
     def swap_category(self, user_id: int, expense_id: int, to_category: str) -> tuple[str, None]:
         if not self.is_owner(user_id):
@@ -107,8 +107,8 @@ class Bot:
         with GLOBAL_LOCK:
             row = self.store.update_category(expense_id, to_category)
         if row is None:
-            return "🧅 that one is already gone from the swamp.", None
-        return f"🧅 re-chewed: {row.category} · {row.currency} {fmt_amount(row.amount)}", None
+            return "that one is already gone from the swamp.", None
+        return f"re-chewed: {row.category} · {row.currency} {fmt_amount(row.amount)}", None
 
 
 def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
@@ -127,7 +127,7 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
         if not await gate(update, ctx):
             return
         await update.effective_message.reply_text(
-            "🧅 I am your own shrek. Text me expenses like 'had coffee 30 rupees'.\n"
+            "I am your own shrek. Text me expenses like 'had coffee 30 rupees'.\n"
             "/key <your gemini key> enables the smart brain. (/help)"
         )
 
@@ -135,9 +135,9 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
         if not await gate(update, ctx):
             return
         await update.effective_message.reply_text(
-            "🧅 swallow expenses: just type them — e.g. 'groceries 450 rupees'\n"
-            "/key <gemini-key> — your own key, your own tokens\n"
-            "/forgetkey — octopus brain off, regex fallback stays\n"
+            "swallow expenses: just type them, e.g. 'groceries 450 rupees'\n"
+            "/key <gemini-key> -- your own key, your own tokens (persisted in your .env)\n"
+            "/forgetkey -- smart brain off, regex fallback stays\n"
             "Buttons under each swallow: Undo · Change category "
             f"({', '.join(CATEGORIES)})\nYour ledger lives only in this container."
         )
@@ -148,7 +148,7 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
         key = " ".join(ctx.args) if ctx.args else ""
         if not key:
             await update.effective_message.reply_text(
-                "🧅 send it like: /key Aa1...your-key  "
+                "send it like: /key Aa1...your-key  "
                 "(get one: https://aistudio.google.com/apikey)")
             return
         config.save(key)
@@ -157,7 +157,7 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
     async def forgetkey_cmd(update: Update, ctx):
         if not await gate(update, ctx):
             return
-        config.save_forget()
+        config.forget_key()
         await update.effective_message.reply_text(bot.set_owner_key(None))
 
     async def on_message(update: Update, ctx):
@@ -171,8 +171,8 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
             await update.effective_message.reply_text(reply)
             return
         keyboard = [[
-            InlineKeyboardButton("↩︎ Undo", callback_data=f"undo:{expense_id}"),
-            InlineKeyboardButton("🔀 Change category", callback_data=f"swappick:{expense_id}"),
+            InlineKeyboardButton("Undo", callback_data=f"undo:{expense_id}"),
+            InlineKeyboardButton("Change category", callback_data=f"swappick:{expense_id}"),
         ]]
         await update.effective_message.reply_text(reply, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -212,7 +212,8 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
 
 
 def main() -> None:  # pragma: no cover - process entry
-    load_dotenv()
+    load_dotenv()            # project-local .env (next to the CWD)
+    config._load_dotenv_file()  # $SHREK_HOME/.env (the volume in Docker)
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     owner_raw = os.environ.get("SHREK_OWNER_ID", "")
     if not token or not owner_raw.isdigit():
@@ -221,5 +222,6 @@ def main() -> None:  # pragma: no cover - process entry
     db_path = os.environ.get("SHREK_DB_PATH", "shrek.db")
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     bot = Bot(Store(db_path), owner_id=int(owner_raw), token=token)
-    print(f"🧅 shrek-bot awake. swamp owned by telegram id {owner_raw}; db={db_path}")
+    print(f"shrek-bot awake. swamp owned by telegram id {owner_raw}; db={db_path}; "
+          f"model={config.model()}; brain={'gemini' if config.gemini_key() else 'regex-fallback'}")
     build(bot).run_polling(allowed_updates=["message", "callback_query"])

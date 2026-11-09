@@ -1,21 +1,22 @@
 """The shrek CLI: one-shot subcommands + the conversational REPL.
 
 Interface contract (plan Q12): bare `shrek` opens the REPL where every line
-is an expense; list/total/delete/add are separate one-shot invocations.
+is an expense; add/list/total/delete/undo are separate one-shot invocations.
+Configuration is plain env vars (GEMINI_API_KEY, GEMINI_MODEL) with a
+generated $SHREK_HOME/.env fallback -- see shrek.config.
 """
 
-import sys
 from typing import Optional
 
 import typer
 
 import shrek.config as config
 from shrek.models import CATEGORIES, Expense, fmt_amount
-from shrek.parser import ParsedEntry, parse
+from shrek.parser import parse
 from shrek.store import Store
 
 app = typer.Typer(add_completion=False, no_args_is_help=False,
-                  help="🧅 shrek — the ogre that swallows your expenses.")
+                  help="shrek -- the ogre that swallows your expenses.")
 
 LEDGER_HINT = "categories: " + ", ".join(CATEGORIES)
 
@@ -26,7 +27,8 @@ def default_store() -> Store:
 
 
 def current_key() -> Optional[str]:
-    """Configured key, or run the wizard; headless => None (regex fallback)."""
+    """Configured key, or run the setup wizard; headless => None (regex
+    fallback), never a crash."""
     if config.ensure_configured():
         return config.gemini_key()
     return None
@@ -36,8 +38,8 @@ def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = 
     """Parse + commit one line. Shared by CLI, REPL and the bot."""
     entry = parse(text, key=key, model=model)
     if entry is None:
-        return ("I only swallow expenses — no amount+currency in that.\n"
-                "try: ate pizza 200 rupees   (categories: " + ", ".join(CATEGORIES) + ")")
+        return ("I only swallow expenses -- no amount+currency in that.\n"
+                "try: ate pizza 200 rupees   (" + LEDGER_HINT + ")")
     expense = Expense(
         amount=entry.amount,
         currency=entry.currency,
@@ -50,13 +52,13 @@ def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = 
 
 
 def format_entry(entry: Expense) -> str:
-    desc = f" — {entry.description}" if entry.description else ""
-    return f"✅ {entry.category} · {entry.currency} {fmt_amount(entry.amount)}{desc}"
+    desc = f" -- {entry.description}" if entry.description else ""
+    return f"+ {entry.category} · {entry.currency} {fmt_amount(entry.amount)}{desc}"
 
 
 def format_totals(totals: dict[str, float]) -> str:
     if not totals:
-        return "the swamp is empty — nothing swallowed yet."
+        return "the swamp is empty -- nothing swallowed yet."
     return " · ".join(f"{cur} {fmt_amount(amount)}" for cur, amount in totals.items())
 
 
@@ -64,7 +66,7 @@ def format_list(rows: list[Expense]) -> str:
     if not rows:
         return "nothing swallowed yet."
     return "\n".join(
-        f"{r.id}. [{r.category}] {r.currency} {fmt_amount(r.amount)} — {r.description or '(unnamed)'}"
+        f"{r.id}. [{r.category}] {r.currency} {fmt_amount(r.amount)} -- {r.description or '(unnamed)'}"
         for r in rows
     )
 
@@ -78,6 +80,12 @@ def undo_last(store: Store) -> str:
 
 
 # ---- one-shot commands ---------------------------------------------------
+
+@app.command()
+def setup():
+    """First-time setup: saves GEMINI_API_KEY + GEMINI_MODEL to $SHREK_HOME/.env."""
+    config.wizard()
+
 
 @app.command()
 def add(text: str):
@@ -127,14 +135,36 @@ def undo():
     typer.echo(undo_last(default_store()))
 
 
+@app.command()
+def model(
+    name: Optional[str] = typer.Argument(None, help="Gemini model id, e.g. gemini-3.8-flash"),
+):
+    """Show or change the smart brain's model (updates GEMINI_MODEL in $SHREK_HOME/.env)."""
+    if name is None or name.strip() == "":
+        typer.echo(f"current model: {config.model()}")
+        key = config.gemini_key()
+        if key:
+            from shrek import llm
+
+            typer.echo("available (live from your key):\n  " + "\n  ".join(llm.list_models(key)))
+        return
+    value = name.strip()
+    if not value.startswith("gemini"):
+        typer.echo(f"shrek: '{value}' does not look like a Gemini model id (e.g. gemini-3.8-flash).", err=True)
+        raise typer.Exit(code=1)
+    path = config.save_model(value)
+    typer.echo(f"smart brain now: {value}.")
+    typer.echo(f"written: {path} -- or set GEMINI_MODEL= in your environment to override it.")
+
+
 # ---- REPL ----------------------------------------------------------------
 
 def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str]) -> str:
     word = line.strip().lower()
     if word in ("exit", "quit", "q"):
-        return "🧅 burp. bye."
-    if word in ("",):  # blank line: stand pat
-        return "…waiting for expenses. (help | exit)"
+        return "burp. bye."
+    if word == "":  # blank line: stand pat
+        return "...waiting for expenses. (help | exit)"
     if word == "help":
         return ("type expenses like: ate pizza 200 rupees\n"
                 "in-session: list | total | undo | categories | exit")
@@ -153,12 +183,12 @@ def repl() -> None:
     store = default_store()
     key = current_key()
     model = config.model() if key else None
-    typer.echo("🧅 shrek is listening. Type expenses ('ate pizza 200 rupees'), 'help', or 'exit'.")
+    typer.echo("shrek is listening. type expenses ('ate pizza 200 rupees'), 'help', or 'exit'.")
     while True:
         try:
-            line = input("🧅 > ").strip()
+            line = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
-            typer.echo("\n🧅 burp. bye.")
+            typer.echo("\nburp. bye.")
             return
         if not line:
             continue

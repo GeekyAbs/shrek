@@ -4,6 +4,7 @@ import json
 import sys
 import typing as t
 
+from shrek.config import DEFAULT_MODEL
 from shrek.models import CATEGORIES
 from shrek.parser import ParsedEntry
 
@@ -36,7 +37,7 @@ _PROMPT = (
 NOT_EXPENSE = object()
 
 
-def parse_expense(text: str, key: str, model: str = "gemini-2.5-flash") -> t.Optional[ParsedEntry]:
+def parse_expense(text: str, key: str, model: str = DEFAULT_MODEL) -> t.Optional[ParsedEntry]:
     """LLM-parse one line. Never raises; returns None on any problem so the
     caller can fall back to the deterministic regex engine."""
     if not key or not text or not text.strip():
@@ -79,7 +80,7 @@ def parse_expense(text: str, key: str, model: str = "gemini-2.5-flash") -> t.Opt
 
 def list_models(key: str) -> list[str]:
     """Model list for the first-run wizard. Live fetch, curated fallback."""
-    fallback = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+    fallback = [DEFAULT_MODEL, "gemini-3.8-flash-lite", "gemini-2.5-pro"]
     if not key:
         return fallback
     try:

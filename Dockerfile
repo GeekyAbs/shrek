@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
-# 🧅 shrek-bot image: one container, one owner, one SQLite file in /data.
+# shrek-bot image: one container, one owner, one SQLite file in /data.
+# Config = plain env vars (see .env.example); SHREK_HOME=/data keeps the
+# ledger AND the .env (with GEMINI_API_KEY/GEMINI_MODEL) on the volume.
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 

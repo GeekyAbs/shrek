@@ -150,7 +150,7 @@ def parse(
     if key:
         from shrek import llm
 
-        entry = llm.parse_expense(text, key=key, model=model or "gemini-2.5-flash")
+        entry = llm.parse_expense(text, key=key, model=model)
         if entry is llm.NOT_EXPENSE:
             return None  # terminal: the smart brain judged; do not regex-overrule it
     if entry is None:
