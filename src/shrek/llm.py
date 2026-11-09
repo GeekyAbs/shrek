@@ -31,6 +31,27 @@ _PROMPT = (
     "leave amount 0."
 )
 
+#: Structured output contract for the batched organize call.
+_CATEGORIZE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "id": {"type": "INTEGER"},
+            "category": {"type": "STRING", "enum": list(CATEGORIES)},
+        },
+        "required": ["id", "category"],
+    },
+}
+
+_CATEGORIZE_PROMPT = (
+    "You organize a personal expense ledger. For every row you receive "
+    "(id, description, amount, currency), pick the single best category "
+    "from the allowed enum. Use 'miscellaneous' only when the description "
+    "does not let you decide. Return one {id, category} object per input "
+    "id, and never invent ids."
+)
+
 #: Sentinel meaning "the LLM confidently judged this line is not a spend"
 #: (income, refund, chit-chat, praise for ogres). Callers MUST treat it as
 #: terminal — no regex fallback — so a refund is never swallowed as a debit.
@@ -75,6 +96,55 @@ def parse_expense(text: str, key: str, model: str = DEFAULT_MODEL) -> t.Optional
         )
     except Exception as exc:  # brief: bad input/keys never crash the tool
         print(f"shrek: gemini parse failed ({type(exc).__name__}); using fallback", file=sys.stderr)
+        return None
+
+
+def categorize(
+    rows: list[dict],
+    key: str,
+    model: str = DEFAULT_MODEL,
+) -> t.Optional[dict[int, str]]:
+    """Categorize every row in one Gemini call. Never raises; returns None
+    on any problem so the caller can leave the ledger untouched."""
+    if not key or not rows:
+        return None
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(
+            model=model,
+            contents=[json.dumps(rows)],
+            config=types.GenerateContentConfig(
+                system_instruction=_CATEGORIZE_PROMPT,
+                response_mime_type="application/json",
+                response_schema=_CATEGORIZE_SCHEMA,
+                temperature=0.1,
+            ),
+        )
+        raw = response.text
+        if not raw:
+            return None
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return None
+        valid_ids = {int(row["id"]) for row in rows}
+        out: dict[int, str] = {}
+        for item in data:
+            try:
+                row_id = int(item["id"])
+                category = item.get("category")
+            except (KeyError, TypeError, ValueError):
+                continue
+            if row_id in valid_ids and category in CATEGORIES:
+                out[row_id] = category
+        return out
+    except Exception as exc:  # brief: bad input/keys never crash the tool
+        print(
+            f"shrek: gemini categorize failed ({type(exc).__name__}); nothing changed",
+            file=sys.stderr,
+        )
         return None
 
 
