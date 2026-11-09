@@ -29,10 +29,13 @@ and no stranger ever writes to your swamp.
 
 ```console
 uv tool install .
-shrek setup            # interactive: saves GEMINI_API_KEY + GEMINI_MODEL to ~/.shrek/.env (0600)
+shrek setup            # interactive: saves GEMINI_API_KEY + GEMINI_MODEL + default currency to ~/.shrek/.env (0600)
 shrek                  # opens the REPL; or one-shot commands below
+shrek currency INR     # show or change the default currency for bare amounts
 
 shrek add "delivery 450 rupees"
+shrek add "rickshaw 50"                       # bare amount -> default currency
+shrek add "20 for rickshaw, 10 for bus"        # one line, two rows
 shrek list
 shrek total            # totals per currency, never franken-summed
 shrek total food month # category and period filters combine
@@ -40,7 +43,7 @@ shrek undo             # spit the last one back out
 shrek delete 3
 shrek organize         # re-categorize every miscellaneous row in one Gemini call
 shrek organize --dry-run  # preview the changes, write nothing
-# in the REPL: list | total | undo | organize | categories | exit
+# in the REPL: list | total | undo | organize | categories | currency <code> | exit
 ```
 
 No key? `shrek` still works -- the regex brain parses plain `<number> rupees`
@@ -86,6 +89,8 @@ docker run -d --name my-shrek \
 
 5. DM the bot: `/start`, then `had coffee 30 rupees`. Each swallow gets
    **Undo** and **Change category** buttons (both act on that exact row).
+   `/currency <code>` sets the default currency for bare amounts (reads and
+   writes `SHREK_DEFAULT_CURRENCY` in `/data/.env`).
 6. `/key <gemini-key>` turns the smart brain on right from chat -- it is
    written to `/data/.env`, so it survives restarts. `/forgetkey` turns
    it off again. `/organize` re-categorizes every `miscellaneous` row in
@@ -98,21 +103,25 @@ Any other Telegram user who messages your bot only ever hears:
 
 ## How a line becomes a ledger row
 
-1. **Smart brain** (Gemini, structured JSON response schema): amount,
-   currency, category from the fixed preset
-   (food, groceries, transport, rent, bills, shopping, health, fun, travel,
-   other, miscellaneous), cleaned description. `miscellaneous` means "the
-   brain could not decide"; `other` is a confident catch-all. Income/refund
-   verdicts are terminal -- refunds are never swallowed as debits. v1 is
-   debit-only.
-2. **Regex brain**: `200 rupees`, `₹200`, `$5`, `12,50 EUR`, `50 paise`
-   -- deterministic and exhaustively tested. Comma rules: `12,50` is a
-   decimal comma, `2,450` a thousands grouping, `12,50,000` lakh grouping.
-3. **The ledger**: SQLite via SQLModel. Currencies are recorded as-written
+1. **Regex-first write**: the deterministic parser splits a message into
+   entries (`20 for rickshaw, 10 for bus` -> two rows) and commits each
+   parseable expense to SQLite **before** any Gemini call, with
+   `category = miscellaneous` and `category_source = regex`. Bare amounts
+   (`rickshaw 50`, `20 for rickshaw`) use the user's default currency.
+   Refund/income segments (`refund`, `salary`, `cashback`, ...) are skipped
+   by the regex but still judged by the LLM when a key exists.
+2. **Category fill**: one batched `categorize` call asks Gemini for a category
+   per saved row. A Gemini failure, hang, or a killed process leaves the
+   rows saved as `miscellaneous` -- nothing is lost. The LLM may change
+   **only** the category; amount, currency and description stay exactly as
+   saved.
+3. **LLM fallback**: lines the regex cannot parse get one `parse_expense`
+   call when a key exists; `not_expense`/income verdicts are terminal.
+4. **The ledger**: SQLite via SQLModel. Currencies are recorded as-written
    and never converted; `total` sums per currency in SQL; period windows
    (`today | week | month`) follow your local calendar. Each row records
    `category_source` (`llm | regex | manual | organized | unknown`).
-4. **Upgrading** from a pre-organize build runs a one-time migration:
+5. **Upgrading** from a pre-organize build runs a one-time migration:
    `category_source` is added, legacy `other` rows are deleted, and
    `PRAGMA user_version` moves to 1.
 
@@ -134,6 +143,7 @@ Variables (same names everywhere):
 GEMINI_API_KEY=...            # BYOK; never rotated into logs, file saved 0600
 GEMINI_MODEL=gemini-3.8-flash # any Gemini generateContent model id
 SHREK_HOME=~/.shrek           # relocate ledger + .env (set in Docker to /data)
+SHREK_DEFAULT_CURRENCY=INR    # default currency for bare amounts (chosen on first run)
 SHREK_DB_PATH=/data/ledger.db # bot ledger only
 SHREK_OWNER_ID=123456789      # bot access lock
 TELEGRAM_BOT_TOKEN=...        # from BotFather
