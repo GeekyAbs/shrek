@@ -176,3 +176,48 @@ def test_zero_amount_is_not_a_debit():
 def test_emoji_and_unicode_survive():
     p = parse_regex("🍕 250 rupees")
     assert p.amount == 250.0 and "🍕" in p.description
+
+
+# --- bare amounts: no currency token, use the configured default ---------
+
+def test_bare_trailing_number_uses_default_currency():
+    p = parse_regex("rickshaw 50")
+    assert p is not None
+    assert p.amount == 50.0 and p.currency == "INR"
+    assert p.description == "rickshaw"
+
+
+def test_bare_number_uses_configured_default():
+    assert parse_regex("rickshaw 50", default_currency="AED").currency == "AED"
+
+
+def test_bare_connector_forms():
+    assert parse_regex("20 for rickshaw").amount == 20.0
+    assert parse_regex("20 for rickshaw").description == "rickshaw"
+    assert parse_regex("10 on bus").amount == 10.0
+    assert parse_regex("5 to the driver").amount == 5.0
+
+
+def test_explicit_currency_beats_default():
+    p = parse_regex("rickshaw 50 dollars", default_currency="INR")
+    assert p.amount == 50.0 and p.currency == "USD"
+
+
+def test_bare_description_drops_connector():
+    assert parse_regex("rickshaw for 50").description == "rickshaw"
+
+
+@pytest.mark.parametrize("text", [
+    "meeting at 3",
+    "call me at 3pm",
+    "50% off",
+    "call 9876543210",
+    "flat 3:30",
+    "rickshaw 1234567",
+])
+def test_bare_number_guards(text):
+    assert parse_regex(text) is None
+
+
+def test_bare_number_needs_a_letter():
+    assert parse_regex("50") is None
