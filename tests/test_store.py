@@ -116,6 +116,36 @@ def test_total_empty_store(store):
     assert store.total() == {}
 
 
+def test_update_category_preserves_id_and_timestamp(store):
+    ts = NOW - timedelta(days=3)
+    eid = store.add(mk(amount=90.0, ts=ts))
+    row = store.update_category(eid, "bills")
+    assert row is not None
+    assert row.category == "bills" and row.id == eid and row.ts == ts
+    assert store.total(category="bills") == {"INR": 90.00}
+
+
+def test_update_category_missing_row(store):
+    assert store.update_category(777, "food") is None
+
+
+def test_update_category_coerces_to_preset(store):
+    eid = store.add(mk())
+    assert store.update_category(eid, "totally-made-up").category == "other"
+
+
+def test_latest_returns_newest(store):
+    store.add(mk(description="older", ts=NOW - timedelta(days=1)))
+    newest = store.add(mk(description="newest"))
+    assert store.latest().description == "newest"
+    store.delete(newest)
+    assert store.latest().description == "older"
+
+
+def test_empty_store_latest_is_none(store):
+    assert store.latest() is None
+
+
 def test_add_persists_across_store_instances(tmp_path):
     path = tmp_path / "ledger.db"
     s1 = Store(path)

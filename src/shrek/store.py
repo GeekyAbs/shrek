@@ -112,6 +112,22 @@ class Store:
                 sums[row.currency] += row.amount
         return {currency: round(total, 2) for currency, total in sorted(sums.items())}
 
+    def update_category(self, expense_id: int, category: str) -> Optional[Expense]:
+        """Re-chew one row's category in place: id, timestamp and currency
+        untouched (moving a 3-day-old row must not move its date)."""
+        if expense_id is None:
+            return None
+        category = coerce_category(category)
+        with Session(self.engine) as session:
+            row = session.get(Expense, expense_id)
+            if row is None:
+                return None
+            row.category = category
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row
+
     def latest(self) -> Optional[Expense]:
         with Session(self.engine) as session:
             stmt = select(Expense).order_by(Expense.id.desc()).limit(1)

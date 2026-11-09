@@ -23,7 +23,7 @@ from telegram.ext import (
 )
 
 import shrek.config as config
-from shrek.models import CATEGORIES, Expense
+from shrek.models import CATEGORIES, Expense, coerce_category, fmt_amount
 from shrek.parser import parse
 from shrek.store import Store
 
@@ -67,7 +67,10 @@ class Bot:
 
     # -- core behaviors, return (text, buttons) for smoke tests -----------
 
-    def owner_message(self, text: str) -> tuple[str, Optional[str]]:
+    def owner_message(self, text: str) -> tuple[str, Optional[int]]:
+        """Swallow one owner line. Returns (reply, expense_id) — the id goes
+        into the reply's inline buttons so Undo/Change-category act on *that*
+        row, not on whatever is newest when pressed."""
         entry = parse(text, key=self.owner_key, model=self.model)
         if entry is None:
             return ("🧅 I did not get that — I swallow expenses. "
@@ -82,42 +85,30 @@ class Bot:
         with GLOBAL_LOCK:
             expense.id = self.store.add(expense)
         note = "" if self.owner_key else " · /key to use your Gemini key"
-        body = f"✅ {expense.category} · {expense.currency} {expense.amount:g}"
+        body = f"✅ {expense.category} · {expense.currency} {fmt_amount(expense.amount)}"
         if expense.description:
             body += f" — {expense.description}"
-        return body + note, "ok-swallowed"
+        return body + note, expense.id
 
-    def undo_requested(self, user_id: int) -> tuple[str, None]:
+    def undo_requested(self, user_id: int, expense_id: int) -> tuple[str, None]:
+        if not self.is_owner(user_id):
+            return STRANGER_REPLY, None
+        row = self.store.get(expense_id)
+        if row is None:
+            return "🧅 that one is already gone from the swamp.", None
+        with GLOBAL_LOCK:
+            self.store.delete(expense_id)
+        desc = row.description or f"#{row.id}"
+        return f"🧅 spat it back out: {desc} · {row.currency} {fmt_amount(row.amount)}", None
+
+    def swap_category(self, user_id: int, expense_id: int, to_category: str) -> tuple[str, None]:
         if not self.is_owner(user_id):
             return STRANGER_REPLY, None
         with GLOBAL_LOCK:
-            last = self.store.latest()
-            if last is None:
-                return "🧅 nothing to spit out — the swamp is empty.", None
-            self.store.delete(last.id)
-        desc = last.description or f"#{last.id}"
-        return f"🧅 spat it back out: {desc} · {last.currency} {last.amount:g}", None
-
-    def swap_category(self, user_id: int, to_category: str) -> tuple[str, None]:
-        if not self.is_owner(user_id):
-            return STRANGER_REPLY, None
-        from shrek.models import coerce_category
-
-        with GLOBAL_LOCK:
-            last = self.store.latest()
-            if last is None:
-                return "🧅 nothing to re-chew — the swamp is empty.", None
-            last.category = coerce_category(to_category)
-            row = Expense(
-                amount=last.amount,
-                currency=last.currency,
-                category=last.category,
-                description=last.description,
-                source=last.source,
-            )
-            self.store.delete(last.id)
-            row.id = self.store.add(row)
-        return f"🧅 re-chewed: {row.category} · {row.currency} {row.amount:g}", None
+            row = self.store.update_category(expense_id, to_category)
+        if row is None:
+            return "🧅 that one is already gone from the swamp.", None
+        return f"🧅 re-chewed: {row.category} · {row.currency} {fmt_amount(row.amount)}", None
 
 
 def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
@@ -175,34 +166,41 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
         text = (update.effective_message.text or "").strip()
         if not text or text.startswith("/"):
             return
-        reply, buttons = bot.owner_message(text)
-        if buttons is None:
+        reply, expense_id = bot.owner_message(text)
+        if expense_id is None:
             await update.effective_message.reply_text(reply)
             return
         keyboard = [[
-            InlineKeyboardButton("↩︎ Undo", callback_data="undo"),
-            InlineKeyboardButton("🔀 Change category", callback_data="swap:pick"),
+            InlineKeyboardButton("↩︎ Undo", callback_data=f"undo:{expense_id}"),
+            InlineKeyboardButton("🔀 Change category", callback_data=f"swappick:{expense_id}"),
         ]]
         await update.effective_message.reply_text(reply, reply_markup=InlineKeyboardMarkup(keyboard))
 
-    async def on_button(update: Update, ctx):
+    async def on_button(update: Update, ctx):  # noqa: C901 (three callback shapes in one place)
         query = update.callback_query
+        # strangers never 500 and never get to answer silently — always answer
         await query.answer()
         data = query.data or ""
-        if data == "undo":
-            reply, _ = bot.undo_requested(query.from_user.id)
+        parts = data.split(":", 1)
+        kind = parts[0]
+        arg = parts[1] if len(parts) == 2 else ""
+        if not bot.is_owner(query.from_user.id):
+            await query.edit_message_text(STRANGER_REPLY)
+            return
+        if kind == "undo" and arg.isdigit():
+            reply, _ = bot.undo_requested(query.from_user.id, int(arg))
             await query.edit_message_text(reply)
-        elif data == "swap:pick":
-            rows = [[InlineKeyboardButton(c.title(), callback_data=f"swap:{c}")]
-                    for c in CATEGORIES]
-            await query.edit_message_reply_markup(
-                reply_markup=InlineKeyboardMarkup(rows))
-        elif data.startswith("swap:"):
-            to = data.removeprefix("swap:")
-            if to == "pick":
-                return
-            reply, _ = bot.swap_category(query.from_user.id, to)
-            await query.edit_message_text(reply)
+        elif kind == "swappick" and arg.isdigit():
+            rows = [
+                [InlineKeyboardButton(c.title(), callback_data=f"swap:{arg}:{c}")]
+                for c in CATEGORIES
+            ]
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(rows))
+        elif kind == "swap" and ":" in arg:
+            raw_id, category = arg.split(":", 1)
+            if raw_id.isdigit():
+                reply, _ = bot.swap_category(query.from_user.id, int(raw_id), category)
+                await query.edit_message_text(reply)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))

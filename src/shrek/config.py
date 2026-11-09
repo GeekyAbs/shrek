@@ -1,9 +1,9 @@
 """User config (~/.shrek/config.toml) and the first-run TUI wizard."""
 
 import os
-import shutil
 import stat
 import sys
+from getpass import getpass
 from pathlib import Path
 from typing import Optional
 
@@ -66,7 +66,7 @@ def ensure_configured() -> bool:
     """Run the first-run wizard if needed. Returns whether a key exists."""
     if is_configured():
         return True
-    if not sys.stdin.isatty() or not shutil.which("uv"):  # headless: fail politely
+    if not sys.stdin.isatty():  # headless: fail politely, never a traceback
         print(
             "shrek: no Gemini key configured.\n"
             "  run `shrek` in a terminal to walk through first-time setup,\n"
@@ -85,7 +85,7 @@ def wizard() -> None:
     key = ""
     while not key:
         try:
-            key = input("paste your Gemini API key (input hidden? no — it is NOT): ").strip()
+            key = getpass("🔑 paste your Gemini API key (input hidden; nothing is echoed back): ").strip()
         except EOFError:
             return
         if not key:

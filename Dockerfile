@@ -15,8 +15,9 @@ COPY README.md ./
 RUN uv sync --no-dev --frozen --no-install-project && \
     uv pip install --no-cache --system .
 
-# ledger volume
+# ledger + BYOK key volume (config.toml lives at $SHREK_HOME too)
 ENV SHREK_DB_PATH=/data/ledger.db
+ENV SHREK_HOME=/data
 VOLUME /data
 
 ENTRYPOINT ["shrek-bot"]

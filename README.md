@@ -7,8 +7,8 @@ $ shrek
 🧅 > ate pizza 200 rupees
 ✅ food · INR 200 — ate pizza
 
-🧅 > had coffee ₹30, garbage compost 99.50
-✅ other · INR 129.5
+🧅 > had coffee 30 rupees
+✅ other · INR 30 — had coffee
 ```
 
 No round numbers? No clean categories? Shrek's **smart brain** (your own
@@ -67,9 +67,12 @@ docker run -d --name my-shrek \
 ```
 
 5. DM your bot: `/start`, then `had coffee 30 rupees`. Every swallow comes
-   back with **Undo** and **Change category** inline buttons.
+   back with **Undo** and **Change category** inline buttons (both act on
+   that exact row).
 6. Send `/key <your-gemini-key>` whenever you want the smart brain on that
-   instance (BYOK — your key, your tokens). `/forgetkey` turns it off again.
+   instance (BYOK — your key, your tokens). It persists in `/data`
+   (the same volume as the ledger), across container restarts.
+   `/forgetkey` turns it off again.
 
 Any other Telegram user who messages your bot only ever hears:
 

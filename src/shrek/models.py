@@ -21,6 +21,15 @@ CATEGORIES: tuple[str, ...] = (
 )
 
 
+def fmt_amount(value: float) -> str:
+    """Plain decimal, trailing zeros trimmed — 230.5 -> '230.5', 1250000 ->
+    '1250000'. Never scientific notation ({:g} gives 1.25e+06 for lakhs)."""
+    text = f"{value:.2f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
 def coerce_category(name: Optional[str]) -> str:
     """Snap a category name to the preset list; unknown/None -> 'other'."""
     if not name:

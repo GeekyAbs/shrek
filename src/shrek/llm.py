@@ -30,6 +30,12 @@ _PROMPT = (
     "leave amount 0."
 )
 
+#: Sentinel meaning "the LLM confidently judged this line is not a spend"
+#: (income, refund, chit-chat, praise for ogres). Callers MUST treat it as
+#: terminal — no regex fallback — so a refund is never swallowed as a debit.
+NOT_EXPENSE = object()
+
+
 def parse_expense(text: str, key: str, model: str = "gemini-2.5-flash") -> t.Optional[ParsedEntry]:
     """LLM-parse one line. Never raises; returns None on any problem so the
     caller can fall back to the deterministic regex engine."""
@@ -54,8 +60,8 @@ def parse_expense(text: str, key: str, model: str = "gemini-2.5-flash") -> t.Opt
         if not raw:
             return None
         data = json.loads(raw)
-        if data.get("type") != "expense":  # income/non-expense: not our ledger's business
-            return None
+        if data.get("type") != "expense":  # income/non-expense: terminal verdict
+            return NOT_EXPENSE
         amount = float(data.get("amount") or 0)
         if amount <= 0:
             return None

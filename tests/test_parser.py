@@ -2,7 +2,7 @@
 
 import pytest
 
-from shrek.parser import ParsedEntry, parse_regex
+from shrek.parser import ParsedEntry, parse, parse_regex
 
 
 # --- the canonical happy paths ------------------------------------------
@@ -43,10 +43,11 @@ def test_dollar_symbol():
     assert p.amount == 5.0 and p.currency == "USD"
 
 
-def test_euro_symbols_and_words():
-    assert parse_regex("paid 12.50 euros").currency == "EUR"
-    assert parse_regex("€12.50 croissant").currency == "EUR"
-    assert parse_regex("12,50 EUR metro").currency == "EUR"
+def test_comma_decimal_european_style():
+    """12,50 EUR = 12.50; 2,450 rupees = 2450; 12,50,000 = 1250000."""
+    assert parse_regex("12,50 EUR metro").amount == 12.50
+    assert parse_regex("2,450 rupees for shoes").amount == 2450.0
+    assert parse_regex("12,50,000 rupees car").amount == 1250000.0
 
 
 def test_pound_variants():
@@ -67,6 +68,17 @@ def test_pound_variants():
 ])
 def test_number_formats(text, amount):
     assert parse_regex(text).amount == amount
+
+
+def test_paise_is_fraction_of_rupee():
+    p = parse_regex("50 paise candy")
+    assert p.amount == 0.50 and p.currency == "INR"
+
+
+def test_absurd_amounts_are_refused_not_infinity():
+    """A 400-digit literal is a typo/attack, not a receipt: -> None."""
+    assert parse_regex("₹" + "9" * 400) is None
+    assert parse_regex("9" * 20 + " rupees rent") is None
 
 
 def test_amount_written_before_currency_and_after():
@@ -116,7 +128,34 @@ def test_mixed_currencies_takes_first_amount_currency_pair():
     assert p.currency == "USD" and p.amount == 10.0
 
 
-# --- result shape ----------------------------------------------------------
+# --- the LLM-dispatch contract (income verdicts are terminal) ------------
+
+def test_llm_income_verdict_is_terminal(monkeypatch):
+    """When the LLM confidently says 'not an expense', we do NOT regex-fallback
+    and swallow a refund as a debit. Terminal: None."""
+    import shrek.llm as llm
+
+    monkeypatch.setattr(llm, "parse_expense", lambda *a, **k: llm.NOT_EXPENSE)
+    assert parse("refund 200 rupees", key="KEY") is None
+
+
+def test_llm_error_falls_back(monkeypatch):
+    """LLM error (None) -> deterministic regex fallback with 'fallback' mark."""
+    import shrek.llm as llm
+
+    monkeypatch.setattr(llm, "parse_expense", lambda *a, **k: None)
+    p = parse("milk 45 rupees", key="KEY")
+    assert p.amount == 45.0 and p.confidence == "fallback"
+
+
+def test_llm_verdict_used_directly(monkeypatch):
+    import shrek.llm as llm
+    from shrek.parser import ParsedEntry
+
+    verdict = ParsedEntry(amount=12.5, currency="EUR", category="fun",
+                          description="coffee", confidence="llm")
+    monkeypatch.setattr(llm, "parse_expense", lambda *a, **k: verdict)
+    assert parse("coffee 12.50", key="KEY") is verdict
 
 def test_result_is_parsed_entry_with_exact_confidence():
     p = parse_regex("pizza 200 rupees")

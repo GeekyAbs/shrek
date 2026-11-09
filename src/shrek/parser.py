@@ -65,10 +65,20 @@ def _norm_currency(token: str) -> str:
     return CURRENCY_TOKENS[token.lower().strip()]
 
 
-def _norm_amount(raw: str) -> float:
-    """Strip separators ('2,50,000' and '12,50' both human-lakh/universal)."""
+def _norm_amount(raw: str, scale: float = 1.0) -> float:
+    """Commas are continent-dependent, so: no '.' + one comma + exactly two
+    trailing digits => decimal comma ('12,50' = 12.50); otherwise strip
+    thousands separators ('2,450', '12,50,000' are groupings). `scale`
+    handles sub-units (paise = 1/100 rupee)."""
     cleaned = raw.replace(",", "")
-    return float(cleaned)
+    if "." not in raw:
+        end = raw.rsplit(",", 1)[-1]
+        if raw.count(",") == 1 and len(end) == 2:
+            cleaned = raw.replace(",", ".")
+    value = float(cleaned) * scale
+    if value > 1e13:  # 400-digit literal is a typo/attack, not a receipt
+        raise ValueError("absurd amount")
+    return value
 
 
 def _extract_description(text: str, span: tuple[int, int]) -> str:
@@ -97,10 +107,12 @@ def _first_hit(text: str) -> Optional[_Hit]:
         else:  # branch 2: currency then amount
             cur, amount = groups[2], groups[3]
             span = (m.start(3), m.end(4))
-        value = _norm_amount(amount)
+        value = _norm_amount(amount, scale=0.01 if cur.lower() == "paise" else 1.0)
         if value <= 0:
             continue
-        hits.append(_Hit(amount=value, currency=_norm_currency(cur), span=span))
+        # sub-unit tokens collapse into the base currency (paise -> INR)
+        currency_code = "INR" if cur.lower() == "paise" else _norm_currency(cur)
+        hits.append(_Hit(amount=value, currency=currency_code, span=span))
     if not hits:
         return None
     return hits[0]
@@ -139,6 +151,8 @@ def parse(
         from shrek import llm
 
         entry = llm.parse_expense(text, key=key, model=model or "gemini-2.5-flash")
+        if entry is llm.NOT_EXPENSE:
+            return None  # terminal: the smart brain judged; do not regex-overrule it
     if entry is None:
         fallback = parse_regex(text)
         if fallback is not None and key:

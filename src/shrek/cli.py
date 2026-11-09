@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 
 import shrek.config as config
-from shrek.models import CATEGORIES, Expense
+from shrek.models import CATEGORIES, Expense, fmt_amount
 from shrek.parser import ParsedEntry, parse
 from shrek.store import Store
 
@@ -51,20 +51,20 @@ def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = 
 
 def format_entry(entry: Expense) -> str:
     desc = f" — {entry.description}" if entry.description else ""
-    return f"✅ {entry.category} · {entry.currency} {entry.amount:g}{desc}"
+    return f"✅ {entry.category} · {entry.currency} {fmt_amount(entry.amount)}{desc}"
 
 
 def format_totals(totals: dict[str, float]) -> str:
     if not totals:
         return "the swamp is empty — nothing swallowed yet."
-    return " · ".join(f"{cur} {amount:g}" for cur, amount in totals.items())
+    return " · ".join(f"{cur} {fmt_amount(amount)}" for cur, amount in totals.items())
 
 
 def format_list(rows: list[Expense]) -> str:
     if not rows:
         return "nothing swallowed yet."
     return "\n".join(
-        f"{r.id}. [{r.category}] {r.currency} {r.amount:g} — {r.description or '(unnamed)'}"
+        f"{r.id}. [{r.category}] {r.currency} {fmt_amount(r.amount)} — {r.description or '(unnamed)'}"
         for r in rows
     )
 
@@ -74,7 +74,7 @@ def undo_last(store: Store) -> str:
     if last is None:
         return "nothing to spit out."
     store.delete(last.id)
-    return f"spat it back out: {last.description or f'#{last.id}'} · {last.currency} {last.amount:g}"
+    return f"spat it back out: {last.description or f'#{last.id}'} · {last.currency} {fmt_amount(last.amount)}"
 
 
 # ---- one-shot commands ---------------------------------------------------
@@ -99,6 +99,10 @@ def total(
     period: Optional[str] = typer.Argument(None, help="today | week | month"),
 ):
     """Totals per currency, optionally filtered by category and/or period."""
+    if category is not None and category.strip().lower() not in CATEGORIES:
+        typer.echo(f"shrek: '{category}' is not a swamp category.", err=True)
+        typer.echo(LEDGER_HINT, err=True)
+        raise typer.Exit(code=1)
     try:
         out = default_store().total(category=category, period=period)
     except ValueError as exc:
