@@ -66,6 +66,35 @@ def test_invalid_category_is_filtered(store, monkeypatch):
     assert store.get(eid).category == UNCATEGORIZED
 
 
+def test_manual_miscellaneous_is_never_touched(store, monkeypatch):
+    eid = store.add(mk("parked by hand"))
+    store.update_category(eid, UNCATEGORIZED, source="manual")
+    called = {"n": 0}
+
+    def fake(rows, key, model=None):
+        called["n"] += 1
+        return {eid: "food"}
+
+    monkeypatch.setattr("shrek.llm.categorize", fake)
+    rep = organize(store, key="k")
+    assert rep.candidates == 0 and rep.changes == []
+    assert called["n"] == 0
+    assert store.get(eid).category_source == "manual"
+
+
+def test_write_failure_returns_error_and_writes_nothing(store, monkeypatch):
+    eid = store.add(mk("bus ticket"))
+    monkeypatch.setattr("shrek.llm.categorize", lambda rows, key, model=None: {eid: "transport"})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr(store, "update_categories", boom, raising=False)
+    rep = organize(store, key="k")
+    assert rep.error and rep.applied is False
+    assert store.get(eid).category == UNCATEGORIZED
+
+
 def test_categorizer_failure_writes_nothing(store, monkeypatch):
     eid = store.add(mk("bus ticket"))
     monkeypatch.setattr("shrek.llm.categorize", lambda rows, key, model=None: None)

@@ -41,7 +41,11 @@ def organize(
     dry_run: bool = False,
 ) -> OrganizeReport:
     """Re-categorize every `miscellaneous` row in one batched LLM call."""
-    rows: list[Expense] = store.list(category=UNCATEGORIZED)
+    rows: list[Expense] = [
+        row
+        for row in store.list(category=UNCATEGORIZED)
+        if row.category_source != "manual"
+    ]
     if not rows:
         return OrganizeReport(candidates=0, changes=[], applied=not dry_run)
     if not key:
@@ -80,6 +84,16 @@ def organize(
     if dry_run:
         return OrganizeReport(candidates=len(rows), changes=changes, applied=False)
 
-    for change in changes:
-        store.update_category(change.id, change.new, source="organized")
+    try:
+        store.update_categories(
+            [(change.id, change.new) for change in changes],
+            source="organized",
+        )
+    except Exception:
+        return OrganizeReport(
+            candidates=len(rows),
+            changes=[],
+            applied=False,
+            error="could not write changes -- nothing changed",
+        )
     return OrganizeReport(candidates=len(rows), changes=changes, applied=True)

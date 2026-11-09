@@ -1,6 +1,7 @@
 import json
 
 from shrek import llm
+from shrek.models import UNCATEGORIZED
 
 
 class _Resp:
@@ -39,6 +40,21 @@ def test_categorize_maps_ids_and_filters_invalid(monkeypatch):
     )
     monkeypatch.setattr("google.genai.Client", _FakeClient)
     assert llm.categorize(ROWS, key="k") == {1: "transport"}
+
+
+def test_parse_expense_invalid_category_becomes_miscellaneous(monkeypatch):
+    _FakeClient.payload = json.dumps(
+        {
+            "type": "expense",
+            "amount": 10.0,
+            "currency": "INR",
+            "category": "not-a-category",
+            "description": "x",
+        }
+    )
+    monkeypatch.setattr("google.genai.Client", _FakeClient)
+    entry = llm.parse_expense("x 10", key="k")
+    assert entry.category == UNCATEGORIZED
 
 
 def test_categorize_without_key_returns_none():

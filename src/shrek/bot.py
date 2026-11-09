@@ -23,13 +23,7 @@ from telegram.ext import (
 )
 
 import shrek.config as config
-from shrek.models import (
-    CATEGORIES,
-    UNCATEGORIZED,
-    Expense,
-    coerce_category,
-    fmt_amount,
-)
+from shrek.models import CATEGORIES, Expense, coerce_category, fmt_amount
 from shrek.organize import organize as run_organize
 from shrek.parser import parse
 from shrek.store import Store
@@ -85,7 +79,7 @@ class Bot:
         expense = Expense(
             amount=entry.amount,
             currency=entry.currency,
-            category=entry.category or UNCATEGORIZED,
+            category=coerce_category(entry.category),
             category_source="llm" if entry.confidence == "llm" else "regex",
             description=entry.description,
             source="telegram",

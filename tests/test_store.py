@@ -191,6 +191,34 @@ def test_update_category_without_source_preserves_it(store):
     assert row.category_source == "manual"
 
 
+def test_update_categories_is_atomic(store, monkeypatch):
+    a = store.add(mk(description="a", category="miscellaneous"))
+    b = store.add(mk(description="b", category="miscellaneous"))
+    calls = {"n": 0}
+    real = __import__("shrek.store", fromlist=["coerce_category"]).coerce_category
+
+    def boom(name):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("boom")
+        return real(name)
+
+    monkeypatch.setattr("shrek.store.coerce_category", boom)
+    with pytest.raises(RuntimeError):
+        store.update_categories([(a, "food"), (b, "rent")], source="organized")
+    assert store.get(a).category == "miscellaneous"
+    assert store.get(b).category == "miscellaneous"
+
+
+def test_update_categories_updates_every_row(store):
+    a = store.add(mk(description="a"))
+    b = store.add(mk(description="b"))
+    assert store.update_categories([(a, "food"), (b, "rent")], source="organized") == 2
+    assert store.get(a).category == "food"
+    assert store.get(b).category == "rent"
+    assert store.get(a).category_source == "organized"
+
+
 def test_migration_adds_column_deletes_legacy_other_and_bumps_version(tmp_path):
     path = tmp_path / "ledger.db"
     _make_legacy_db(path)

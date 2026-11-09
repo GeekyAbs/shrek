@@ -11,7 +11,7 @@ from typing import Optional
 import typer
 
 import shrek.config as config
-from shrek.models import CATEGORIES, UNCATEGORIZED, Expense, fmt_amount
+from shrek.models import CATEGORIES, Expense, coerce_category, fmt_amount
 from shrek.organize import OrganizeReport, organize as run_organize
 from shrek.parser import parse
 from shrek.store import Store
@@ -44,7 +44,7 @@ def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = 
     expense = Expense(
         amount=entry.amount,
         currency=entry.currency,
-        category=entry.category or UNCATEGORIZED,
+        category=coerce_category(entry.category),
         category_source="llm" if entry.confidence == "llm" else "regex",
         description=entry.description,
         source="cli",
@@ -169,6 +169,8 @@ def organize(
         dry_run=dry_run,
     )
     typer.echo(format_organize_report(report))
+    if report.error:
+        raise typer.Exit(code=1)
 
 
 @app.command()

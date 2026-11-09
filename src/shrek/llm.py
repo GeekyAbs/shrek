@@ -5,7 +5,7 @@ import sys
 import typing as t
 
 from shrek.config import DEFAULT_MODEL
-from shrek.models import CATEGORIES
+from shrek.models import CATEGORIES, coerce_category
 from shrek.parser import ParsedEntry
 
 #: Structured output contract sent to Gemini.
@@ -90,7 +90,7 @@ def parse_expense(text: str, key: str, model: str = DEFAULT_MODEL) -> t.Optional
         return ParsedEntry(
             amount=amount,
             currency=str(data.get("currency") or "INR").upper() or "INR",
-            category=data.get("category") if data.get("category") in CATEGORIES else "other",
+            category=coerce_category(data.get("category")),
             description=str(data.get("description") or "").strip(),
             confidence="llm",
         )

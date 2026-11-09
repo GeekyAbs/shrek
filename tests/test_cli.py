@@ -54,6 +54,14 @@ def test_cli_organize_dry_run_does_not_write(store, monkeypatch):
     assert store.get(eid).category == UNCATEGORIZED
 
 
+def test_cli_organize_failure_exits_nonzero(store, monkeypatch):
+    store.add(mk("bus ticket"))
+    monkeypatch.setattr("shrek.cli.default_store", lambda: store)
+    monkeypatch.setattr("shrek.cli.current_key", lambda: None)
+    result = CliRunner().invoke(app, ["organize"])
+    assert result.exit_code == 1
+
+
 def test_cli_organize_applies_by_default(store, monkeypatch):
     eid = store.add(mk("bus ticket"))
     monkeypatch.setattr("shrek.cli.default_store", lambda: store)

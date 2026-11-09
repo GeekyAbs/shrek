@@ -1,7 +1,7 @@
 """The ledger store. SQLModel over SQLite; Postgres is a later drop-in."""
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Sequence
 
 from sqlalchemy import func
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -159,6 +159,32 @@ class Store:
             session.commit()
             session.refresh(row)
             return row
+
+    def update_categories(
+        self,
+        updates: Sequence[tuple[int, str]],
+        source: Optional[str] = None,
+    ) -> int:
+        """Apply many category changes in one transaction; all or nothing."""
+        if not updates:
+            return 0
+        with Session(self.engine) as session:
+            try:
+                count = 0
+                for expense_id, category in updates:
+                    row = session.get(Expense, expense_id)
+                    if row is None:
+                        continue
+                    row.category = coerce_category(category)
+                    if source is not None:
+                        row.category_source = source
+                    session.add(row)
+                    count += 1
+                session.commit()
+                return count
+            except Exception:
+                session.rollback()
+                raise
 
     def latest(self) -> Optional[Expense]:
         with Session(self.engine) as session:
