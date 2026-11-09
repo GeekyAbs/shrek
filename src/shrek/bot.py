@@ -7,6 +7,7 @@ Undo / Change category buttons. /key stores the owner's Gemini key.
 """
 
 import os
+import re
 import sys
 import threading
 from typing import Optional
@@ -23,9 +24,9 @@ from telegram.ext import (
 )
 
 import shrek.config as config
+from shrek.ingest import ingest
 from shrek.models import CATEGORIES, Expense, coerce_category, fmt_amount
 from shrek.organize import organize as run_organize
-from shrek.parser import parse
 from shrek.store import Store
 
 REPO_LINK = "https://github.com/YOURNAME/shrek"
@@ -68,29 +69,37 @@ class Bot:
 
     # -- core behaviors, return (text, buttons) for smoke tests -----------
 
-    def owner_message(self, text: str) -> tuple[str, Optional[int]]:
-        """Swallow one owner line. Returns (reply, expense_id) — the id goes
-        into the reply's inline buttons so Undo/Change-category act on *that*
-        row, not on whatever is newest when pressed."""
-        entry = parse(text, key=self.owner_key, model=self.model)
-        if entry is None:
-            return ("I did not get that — I swallow expenses. "
-                    "Try like: had coffee 30 rupees  (/help)"), None
-        expense = Expense(
-            amount=entry.amount,
-            currency=entry.currency,
-            category=coerce_category(entry.category),
-            category_source="llm" if entry.confidence == "llm" else "regex",
-            description=entry.description,
-            source="telegram",
-        )
+    def owner_message(self, text: str) -> tuple[str, list[int]]:
+        """Swallow one owner line. Returns (reply, expense_ids) — the ids go
+        into the reply's inline buttons so Undo/Change-category act on *those*
+        rows, not on whatever is newest when pressed."""
         with GLOBAL_LOCK:
-            expense.id = self.store.add(expense)
+            result = ingest(
+                text, self.store, key=self.owner_key, model=self.model,
+                default_currency=config.currency() or "INR", source="telegram",
+            )
+        if result.error:
+            return ("I did not get that — I swallow expenses. "
+                    "Try like: had coffee 30 rupees  (/help)"), []
+        if result.not_expense:
+            return ("that looks like income/refund, not a spend — nothing saved."), []
+        lines = []
+        for expense in result.expenses:
+            body = f"+ {expense.category} · {expense.currency} {fmt_amount(expense.amount)}"
+            if expense.description:
+                body += f" — {expense.description}"
+            lines.append(body)
         note = "" if self.owner_key else " · /key to use your Gemini key"
-        body = f"+ {expense.category} · {expense.currency} {fmt_amount(expense.amount)}"
-        if expense.description:
-            body += f" — {expense.description}"
-        return body + note, expense.id
+        if note and lines:
+            lines[-1] = lines[-1] + note
+        return "\n".join(lines), [int(e.id) for e in result.expenses]
+
+    def set_currency(self, code: str) -> str:
+        value = (code or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            return "send a three-letter currency code, e.g. /currency INR"
+        config.save_currency(value)
+        return f"default currency: {value} (bare amounts now use it)"
 
     def undo_requested(self, user_id: int, expense_id: int) -> tuple[str, None]:
         if not self.is_owner(user_id):
@@ -150,7 +159,8 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
             return
         await update.effective_message.reply_text(
             "I am your own shrek. Text me expenses like 'had coffee 30 rupees'.\n"
-            "/key <your gemini key> enables the smart brain. (/help)"
+            "/key <your gemini key> enables the smart brain. (/help)\n"
+            "/currency <code> sets the default currency for bare amounts."
         )
 
     async def help_cmd(update: Update, ctx):
@@ -189,20 +199,41 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
         config.forget_key()
         await update.effective_message.reply_text(bot.set_owner_key(None))
 
+    async def currency_cmd(update: Update, ctx):
+        if not await gate(update, ctx):
+            return
+        arg = " ".join(ctx.args) if ctx.args else ""
+        if not arg:
+            buttons = []
+            row = []
+            for code in config.CURRENCY_CHOICES:
+                row.append(InlineKeyboardButton(code, callback_data=f"currency:{code}"))
+                if len(row) == 3:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            await update.effective_message.reply_text(
+                "default currency for bare amounts:", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+        await update.effective_message.reply_text(bot.set_currency(arg))
+
     async def on_message(update: Update, ctx):
         if not await gate(update, ctx):
             return
         text = (update.effective_message.text or "").strip()
         if not text or text.startswith("/"):
             return
-        reply, expense_id = bot.owner_message(text)
-        if expense_id is None:
+        reply, expense_ids = bot.owner_message(text)
+        if not expense_ids:
             await update.effective_message.reply_text(reply)
             return
-        keyboard = [[
-            InlineKeyboardButton("Undo", callback_data=f"undo:{expense_id}"),
-            InlineKeyboardButton("Change category", callback_data=f"swappick:{expense_id}"),
-        ]]
+        keyboard = []
+        for eid in expense_ids:
+            keyboard.append([
+                InlineKeyboardButton("Undo", callback_data=f"undo:{eid}"),
+                InlineKeyboardButton("Change category", callback_data=f"swappick:{eid}"),
+            ])
         await update.effective_message.reply_text(reply, reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def on_button(update: Update, ctx):  # noqa: C901 (three callback shapes in one place)
@@ -230,11 +261,15 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
             if raw_id.isdigit():
                 reply, _ = bot.swap_category(query.from_user.id, int(raw_id), category)
                 await query.edit_message_text(reply)
+        elif kind == "currency" and arg:
+            reply = bot.set_currency(arg)
+            await query.edit_message_text(reply)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("key", key_cmd))
     app.add_handler(CommandHandler("forgetkey", forgetkey_cmd))
+    app.add_handler(CommandHandler("currency", currency_cmd))
     app.add_handler(CommandHandler("organize", organize_cmd))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
