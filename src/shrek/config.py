@@ -5,6 +5,7 @@ everywhere, from the shell, a CI box, or the bot container:
 
     GEMINI_API_KEY   # your BYOK key (required for the smart brain)
     GEMINI_MODEL     # optional, defaults to DEFAULT_MODEL below
+    SHREK_DEFAULT_CURRENCY  # optional; currency for bare amounts (chosen once)
 
 Precedence: real environment wins; otherwise $SHREK_HOME/.env is loaded
 (once a process is inside Docker with SHREK_HOME=/data, that is the same
@@ -12,6 +13,7 @@ volume the ledger uses, so an edited variable survives restarts).
 """
 
 import os
+import re
 import stat
 import sys
 from getpass import getpass
@@ -20,6 +22,10 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("SHREK_HOME", "~/.shrek")).expanduser()
 ENV_PATH = CONFIG_DIR / ".env"
 DEFAULT_MODEL = "gemini-3.8-flash"
+#: First-run choices for the currency used by amounts written without one.
+CURRENCY_CHOICES: tuple[str, ...] = (
+    "INR", "USD", "EUR", "GBP", "AED", "AUD", "CAD", "SGD", "JPY",
+)
 
 _REPO = "https://github.com/YOURNAME/shrek"
 _NEED_KEY = (
@@ -52,6 +58,17 @@ def model() -> str:
     return (os.environ.get("GEMINI_MODEL") or "").strip() or DEFAULT_MODEL
 
 
+def currency() -> "str | None":
+    """Configured default currency for bare amounts, or None when unset."""
+    _load_dotenv_file()
+    return (os.environ.get("SHREK_DEFAULT_CURRENCY") or "").strip().upper() or None
+
+
+def save_currency(code: str) -> Path:
+    """Persist the default currency (uppercase) to SHREK_HOME/.env."""
+    return _upsert_env({"SHREK_DEFAULT_CURRENCY": code.strip().upper()})
+
+
 def is_configured() -> bool:
     return gemini_key() is not None
 
@@ -77,14 +94,20 @@ def _upsert_env(pairs: dict) -> Path:
     return ENV_PATH
 
 
-def save(gemini_key: "str | None" = None, model: "str | None" = None) -> Path:
+def save(
+    gemini_key: "str | None" = None,
+    model: "str | None" = None,
+    currency: "str | None" = None,
+) -> Path:
     pairs = {}
     if gemini_key is not None:
         pairs["GEMINI_API_KEY"] = gemini_key
     if model is not None:
         pairs["GEMINI_MODEL"] = model
+    if currency is not None:
+        pairs["SHREK_DEFAULT_CURRENCY"] = currency.strip().upper()
     if not pairs:
-        raise ValueError("save() needs a key or model")
+        raise ValueError("save() needs a key, model or currency")
     return _upsert_env(pairs)
 
 
@@ -115,6 +138,48 @@ def ensure_configured() -> bool:
     return is_configured()
 
 
+def _ask_currency(default: str = "INR") -> str:
+    """Numbered currency list; a 3-letter code is accepted too. EOF/Ctrl-C
+    and junk input fall back to `default` so a first run never dead-ends."""
+    print("default currency for amounts written without one:")
+    for i, code in enumerate(CURRENCY_CHOICES, start=1):
+        marker = " (default)" if code == default else ""
+        print(f"  {i}. {code}{marker}")
+    try:
+        choice = input("currency number or code (Enter = default): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return default
+    if not choice:
+        return default
+    if choice.isdigit():
+        index = int(choice) - 1
+        if 0 <= index < len(CURRENCY_CHOICES):
+            return CURRENCY_CHOICES[index]
+        return default
+    code = choice.upper()
+    if re.fullmatch(r"[A-Z]{3}", code):
+        return code
+    return default
+
+
+def ensure_currency(default: str = "INR") -> str:
+    """The configured default currency. Asked once on an interactive
+    terminal and saved; headless/EOF/Ctrl-C use `default` with a note."""
+    current = currency()
+    if current:
+        return current
+    if not sys.stdin.isatty():
+        print(
+            f"shrek: no default currency configured -- using {default} for "
+            "bare amounts (set SHREK_DEFAULT_CURRENCY or run `shrek setup`).",
+            file=sys.stderr,
+        )
+        return default
+    code = _ask_currency(default)
+    save_currency(code)
+    return code
+
+
 def wizard() -> None:
     """Interactive setup: reads key + model choice and writes $SHREK_HOME/.env."""
     print("shrek setup -- the ogre needs one key and a model.")
@@ -143,7 +208,9 @@ def wizard() -> None:
         model = choice
     else:
         print(f"  not in the list; defaulting to {model}")
-    path = save(key, model)
+    currency = _ask_currency()
+    path = save(key, model, currency)
     print(f"\nwritten: {path} (0600)")
     print("change the model any time: edit GEMINI_MODEL in that file, or run `shrek model <name>`.")
-    print("your env vars (GEMINI_API_KEY / GEMINI_MODEL) always override the file.")
+    print("change the currency any time: `shrek currency <code>`.")
+    print("your env vars (GEMINI_API_KEY / GEMINI_MODEL / SHREK_DEFAULT_CURRENCY) always override the file.")
