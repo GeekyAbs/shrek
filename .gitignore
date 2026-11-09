@@ -1,10 +1,18 @@
+# agent/workflow scratch — local only, never in the repo
 .superpowers/
+.agents/
+docs/superpowers/
+
+# caches and generated files
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
 .venv/
 *.egg-info/
+
+# local secrets and data — never commit these
 .env
-.pytest_cache/
 .shrek/
-shrek.db
+*.db
+*.sqlite3
 data/
