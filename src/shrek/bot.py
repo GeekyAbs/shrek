@@ -23,7 +23,14 @@ from telegram.ext import (
 )
 
 import shrek.config as config
-from shrek.models import CATEGORIES, Expense, coerce_category, fmt_amount
+from shrek.models import (
+    CATEGORIES,
+    UNCATEGORIZED,
+    Expense,
+    coerce_category,
+    fmt_amount,
+)
+from shrek.organize import organize as run_organize
 from shrek.parser import parse
 from shrek.store import Store
 
@@ -78,7 +85,8 @@ class Bot:
         expense = Expense(
             amount=entry.amount,
             currency=entry.currency,
-            category=entry.category or "other",
+            category=entry.category or UNCATEGORIZED,
+            category_source="llm" if entry.confidence == "llm" else "regex",
             description=entry.description,
             source="telegram",
         )
@@ -105,10 +113,30 @@ class Bot:
         if not self.is_owner(user_id):
             return STRANGER_REPLY, None
         with GLOBAL_LOCK:
-            row = self.store.update_category(expense_id, to_category)
+            row = self.store.update_category(expense_id, to_category, source="manual")
         if row is None:
             return "that one is already gone from the swamp.", None
         return f"re-chewed: {row.category} · {row.currency} {fmt_amount(row.amount)}", None
+
+    def organize_text(self) -> str:
+        """Re-categorize every miscellaneous row; reply stays under chat limits."""
+        report = run_organize(self.store, key=self.owner_key, model=self.model)
+        if report.error:
+            return f"shrek: {report.error}"
+        if report.candidates == 0:
+            return "nothing to organize -- no miscellaneous expenses."
+        lines = [
+            f"organized {len(report.changes)} of {report.candidates} "
+            "miscellaneous expense(s)"
+        ]
+        for change in report.changes[:20]:
+            desc = f" -- {change.description}" if change.description else ""
+            lines.append(f"{change.id}. {change.old} -> {change.new}{desc}")
+        if len(report.changes) > 20:
+            lines.append(f"...and {len(report.changes) - 20} more")
+        if not report.changes:
+            lines.append("nothing changed.")
+        return "\n".join(lines)
 
 
 def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
@@ -139,8 +167,15 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
             "/key <gemini-key> -- your own key, your own tokens (persisted in your .env)\n"
             "/forgetkey -- smart brain off, regex fallback stays\n"
             "Buttons under each swallow: Undo · Change category "
-            f"({', '.join(CATEGORIES)})\nYour ledger lives only in this container."
+            f"({', '.join(CATEGORIES)})\n"
+            "/organize -- re-categorize miscellaneous expenses in one Gemini call\n"
+            "Your ledger lives only in this container."
         )
+
+    async def organize_cmd(update: Update, ctx):
+        if not await gate(update, ctx):
+            return
+        await update.effective_message.reply_text(bot.organize_text())
 
     async def key_cmd(update: Update, ctx):
         if not await gate(update, ctx):
@@ -206,6 +241,7 @@ def build(bot: Bot) -> Application:  # pragma: no cover - live wiring
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("key", key_cmd))
     app.add_handler(CommandHandler("forgetkey", forgetkey_cmd))
+    app.add_handler(CommandHandler("organize", organize_cmd))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     return app
