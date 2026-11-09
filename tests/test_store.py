@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import event
 
 from shrek.models import CATEGORIES, Expense
 from shrek.store import Store
@@ -152,6 +153,33 @@ def test_add_persists_across_store_instances(tmp_path):
     eid = s1.add(mk(amount=123.45))
     s2 = Store(path)
     assert s2.get(eid).amount == 123.45
+
+
+def test_total_sums_in_sql_not_python(store):
+    store.add(mk(amount=200.0, currency="INR"))
+    store.add(mk(amount=30.5, currency="INR"))
+    store.add(mk(amount=10.0, currency="USD"))
+    seen = []
+
+    @event.listens_for(store.engine, "before_cursor_execute")
+    def capture(conn, cursor, statement, params, context, executemany):
+        seen.append(statement.upper())
+
+    assert store.total() == {"INR": 230.5, "USD": 10.0}
+    assert any("SUM(" in s and "GROUP BY" in s for s in seen)
+
+
+def test_list_limit_is_pushed_into_sql(store):
+    for i in range(5):
+        store.add(mk(description=f"e{i}"))
+    seen = []
+
+    @event.listens_for(store.engine, "before_cursor_execute")
+    def capture(conn, cursor, statement, params, context, executemany):
+        seen.append(statement.upper())
+
+    assert len(store.list(limit=2)) == 2
+    assert any("LIMIT" in s for s in seen)
 
 
 @pytest.mark.parametrize("bad", ["", "today", "this_month", None, 123])

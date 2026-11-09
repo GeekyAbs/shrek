@@ -1,9 +1,9 @@
 """The ledger store. SQLModel over SQLite; Postgres is a later drop-in."""
 
-from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import func
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from shrek.models import Expense, coerce_category
@@ -92,11 +92,10 @@ class Store:
         now: Optional[datetime] = None,
     ) -> list[Expense]:
         stmt = self._filtered(category=category, period=period, now=now)
+        if limit is not None:
+            stmt = stmt.limit(int(limit))
         with Session(self.engine) as session:
-            rows = session.exec(stmt).all()
-            if limit is not None:
-                rows = rows[: int(limit)]
-            return list(rows)
+            return list(session.exec(stmt).all())
 
     def total(
         self,
@@ -104,13 +103,18 @@ class Store:
         period: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> dict[str, float]:
-        """Sum per currency — never converted, never mixed (plan Q13)."""
-        stmt = self._filtered(category=category, period=period, now=now)
-        sums: dict[str, float] = defaultdict(float)
+        """Sum per currency in SQL — never converted, never mixed (plan Q13)."""
+        canon = normalize_period(period)
+        stmt = select(Expense.currency, func.sum(Expense.amount)).group_by(
+            Expense.currency
+        )
+        if category is not None:
+            stmt = stmt.where(Expense.category == coerce_category(category))
+        if canon is not None:
+            stmt = stmt.where(Expense.ts >= period_start(canon, now))
         with Session(self.engine) as session:
-            for row in session.exec(stmt).all():
-                sums[row.currency] += row.amount
-        return {currency: round(total, 2) for currency, total in sorted(sums.items())}
+            rows = session.exec(stmt).all()
+        return {currency: round(float(total), 2) for currency, total in sorted(rows)}
 
     def update_category(self, expense_id: int, category: str) -> Optional[Expense]:
         """Re-chew one row's category in place: id, timestamp and currency
