@@ -1,6 +1,7 @@
 """Gemini structured-JSON parsing of expense lines (the smart swallow)."""
 
 import json
+import re
 import sys
 import typing as t
 
@@ -101,9 +102,16 @@ def parse_expense(
         amount = float(data.get("amount") or 0)
         if amount <= 0:
             return None
+        currency_raw = data.get("currency")
+        if currency_raw is None:
+            currency = default_currency.upper()
+        else:
+            currency = str(currency_raw).strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            currency = default_currency.strip().upper() or "INR"
         return ParsedEntry(
             amount=amount,
-            currency=str(data.get("currency") or default_currency).upper() or default_currency.upper(),
+            currency=currency,
             category=coerce_category(data.get("category")),
             description=str(data.get("description") or "").strip(),
             confidence="llm",

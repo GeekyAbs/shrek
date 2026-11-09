@@ -78,7 +78,7 @@ class Bot:
                 text, self.store, key=self.owner_key, model=self.model,
                 default_currency=config.currency() or "INR", source="telegram",
             )
-        if result.error:
+        if result.error and not result.expenses:
             return ("I did not get that — I swallow expenses. "
                     "Try like: had coffee 30 rupees  (/help)"), []
         if result.not_expense:

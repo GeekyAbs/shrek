@@ -42,12 +42,15 @@ def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = 
     """Parse + commit one line. Shared by CLI, REPL and the bot."""
     result = ingest(text, store, key=key, model=model,
                     default_currency=default_currency, source="cli")
-    if result.error:
-        return ("I only swallow expenses -- no amount+currency in that.\n"
-                "try: ate pizza 200 rupees   (" + LEDGER_HINT + ")")
     if result.not_expense:
         return "that looks like income/refund, not a spend -- nothing saved."
-    return "\n".join(format_entry(e) for e in result.expenses)
+    out_lines = [format_entry(e) for e in result.expenses]
+    if result.error:
+        out_lines.append(f"shrek: {result.error}")
+    if out_lines:
+        return "\n".join(out_lines)
+    return ("I only swallow expenses -- no amount+currency in that.\n"
+            "try: ate pizza 200 rupees   (" + LEDGER_HINT + ")")
 
 
 def format_entry(entry: Expense) -> str:
@@ -243,7 +246,7 @@ def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str]
             return "shrek: send a three-letter currency code, e.g. currency INR"
         config.save_currency(value)
         return f"default currency: {value}"
-    return swallow(line, store, key, model, default_currency)
+    return swallow(line, store, key, model, config.currency() or default_currency)
 
 
 def repl() -> None:
