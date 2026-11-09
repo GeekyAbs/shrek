@@ -1,0 +1,33 @@
+[project]
+name = "shrek"
+version = "0.1.0"
+description = "The ogre that swallows your expenses. Talk to shrek, it keeps receipts."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "shrek and friends" }]
+dependencies = [
+    "typer>=0.12",
+    "sqlmodel>=0.0.22",
+    "python-telegram-bot>=21.9",
+    "google-genai>=1.0.0",
+    "python-dotenv>=1.0",
+    "tomlkit>=0.13",
+]
+
+[project.scripts]
+shrek = "shrek.cli:app"
+shrek-bot = "shrek.bot:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shrek"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
