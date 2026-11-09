@@ -18,7 +18,12 @@ CATEGORIES: tuple[str, ...] = (
     "fun",
     "travel",
     "other",
+    "miscellaneous",
 )
+
+#: The one bucket meaning "the brain could not decide". Never used for a
+#: confident catch-all -- that is what "other" is for.
+UNCATEGORIZED: str = "miscellaneous"
 
 
 def fmt_amount(value: float) -> str:
@@ -31,11 +36,11 @@ def fmt_amount(value: float) -> str:
 
 
 def coerce_category(name: Optional[str]) -> str:
-    """Snap a category name to the preset list; unknown/None -> 'other'."""
+    """Snap a category name to the preset list; unknown/None -> uncategorized."""
     if not name:
-        return "other"
+        return UNCATEGORIZED
     n = str(name).strip().lower()
-    return n if n in CATEGORIES else "other"
+    return n if n in CATEGORIES else UNCATEGORIZED
 
 
 def now_utc() -> datetime:
@@ -51,6 +56,7 @@ class Expense(SQLModel, table=True):
     ts: NaiveDatetime = Field(default_factory=now_utc, index=True)
     amount: float
     currency: str = "INR"
-    category: str = "other"
+    category: str = UNCATEGORIZED
+    category_source: str = "unknown"  # llm | regex | manual | organized | unknown
     description: str = ""
     source: str = "cli"  # cli | telegram

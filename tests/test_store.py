@@ -44,9 +44,9 @@ def test_get_missing_returns_none(store):
     assert store.get(999) is None
 
 
-def test_add_unknown_category_becomes_other(store):
+def test_add_unknown_category_becomes_miscellaneous(store):
     eid = store.add(mk(category="yetti-snacks"))
-    assert store.get(eid).category == "other"
+    assert store.get(eid).category == "miscellaneous"
 
 
 def test_categories_preset_is_frozen():
@@ -131,7 +131,7 @@ def test_update_category_missing_row(store):
 
 def test_update_category_coerces_to_preset(store):
     eid = store.add(mk())
-    assert store.update_category(eid, "totally-made-up").category == "other"
+    assert store.update_category(eid, "totally-made-up").category == "miscellaneous"
 
 
 def test_latest_returns_newest(store):
