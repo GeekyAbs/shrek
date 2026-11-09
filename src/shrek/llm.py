@@ -31,6 +31,15 @@ _PROMPT = (
     "leave amount 0."
 )
 
+
+def _prompt(default_currency: str) -> str:
+    """The parse prompt with the user's configured fallback currency."""
+    code = (default_currency or "INR").strip().upper() or "INR"
+    return (
+        f"{_PROMPT} The default currency is {code} when the line does not "
+        "name one."
+    )
+
 #: Structured output contract for the batched organize call.
 _CATEGORIZE_SCHEMA = {
     "type": "ARRAY",
@@ -58,7 +67,12 @@ _CATEGORIZE_PROMPT = (
 NOT_EXPENSE = object()
 
 
-def parse_expense(text: str, key: str, model: str = DEFAULT_MODEL) -> t.Optional[ParsedEntry]:
+def parse_expense(
+    text: str,
+    key: str,
+    model: str = DEFAULT_MODEL,
+    default_currency: str = "INR",
+) -> t.Optional[ParsedEntry]:
     """LLM-parse one line. Never raises; returns None on any problem so the
     caller can fall back to the deterministic regex engine."""
     if not key or not text or not text.strip():
@@ -72,7 +86,7 @@ def parse_expense(text: str, key: str, model: str = DEFAULT_MODEL) -> t.Optional
             model=model,
             contents=[text],
             config=types.GenerateContentConfig(
-                system_instruction=_PROMPT,
+                system_instruction=_prompt(default_currency),
                 response_mime_type="application/json",
                 response_schema=_EXPENSE_SCHEMA,
                 temperature=0.1,
@@ -89,7 +103,7 @@ def parse_expense(text: str, key: str, model: str = DEFAULT_MODEL) -> t.Optional
             return None
         return ParsedEntry(
             amount=amount,
-            currency=str(data.get("currency") or "INR").upper() or "INR",
+            currency=str(data.get("currency") or default_currency).upper() or default_currency.upper(),
             category=coerce_category(data.get("category")),
             description=str(data.get("description") or "").strip(),
             confidence="llm",

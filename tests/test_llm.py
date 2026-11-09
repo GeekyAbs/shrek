@@ -68,3 +68,23 @@ def test_categorize_failure_returns_none(monkeypatch):
 
     monkeypatch.setattr("google.genai.Client", Boom)
     assert llm.categorize(ROWS, key="k") is None
+
+
+def test_parse_expense_puts_default_currency_in_the_prompt(monkeypatch):
+    seen = {}
+
+    class _RecordingModels:
+        def generate_content(self, **kwargs):
+            seen["prompt"] = kwargs["config"].system_instruction
+            return _Resp(json.dumps({
+                "type": "expense", "amount": 50.0, "currency": "AED",
+                "category": "transport", "description": "rickshaw",
+            }))
+
+    class _RecordingClient:
+        def __init__(self, api_key):
+            self.models = _RecordingModels()
+
+    monkeypatch.setattr("google.genai.Client", _RecordingClient)
+    llm.parse_expense("fifty for a rickshaw", key="k", default_currency="AED")
+    assert "AED" in seen["prompt"]
