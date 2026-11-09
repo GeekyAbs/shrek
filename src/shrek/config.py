@@ -39,14 +39,27 @@ def is_configured() -> bool:
 
 def save(gemini_key: str, model: Optional[str] = None) -> Path:
     """Write the config with owner-only permissions (plan Q17: 0600)."""
+    _write({"gemini_key": gemini_key, "model": model})
+    return CONFIG_PATH
+
+
+def save_forget() -> Path:
+    """Remove the stored key (bot /forgetkey). Model choice survives."""
+    _write({"gemini_key": None})
+    return CONFIG_PATH
+
+
+def _write(pairs: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     doc = tomlkit.parse(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else tomlkit.document()
-    doc["gemini_key"] = gemini_key
-    if model:
-        doc["model"] = model
+    for k, v in pairs.items():
+        if v in (None, ""):
+            if k in doc:
+                del doc[k]
+        else:
+            doc[k] = v
     CONFIG_PATH.write_text(tomlkit.dumps(doc), encoding="utf-8")
     os.chmod(CONFIG_PATH, stat.S_IRUSR | stat.S_IWUSR)
-    return CONFIG_PATH
 
 
 def ensure_configured() -> bool:
