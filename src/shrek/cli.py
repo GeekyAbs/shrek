@@ -6,14 +6,16 @@ Configuration is plain env vars (GEMINI_API_KEY, GEMINI_MODEL) with a
 generated $SHREK_HOME/.env fallback -- see shrek.config.
 """
 
+import re
 from typing import Optional
 
 import typer
 
 import shrek.config as config
+from shrek.ingest import ingest
 from shrek.models import CATEGORIES, Expense, coerce_category, fmt_amount
 from shrek.organize import OrganizeReport, organize as run_organize
-from shrek.parser import parse
+from shrek.parser import needs_default_currency
 from shrek.store import Store
 
 app = typer.Typer(add_completion=False, no_args_is_help=False,
@@ -35,22 +37,17 @@ def current_key() -> Optional[str]:
     return None
 
 
-def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = None) -> str:
+def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = None,
+            default_currency: str = "INR") -> str:
     """Parse + commit one line. Shared by CLI, REPL and the bot."""
-    entry = parse(text, key=key, model=model)
-    if entry is None:
+    result = ingest(text, store, key=key, model=model,
+                    default_currency=default_currency, source="cli")
+    if result.error:
         return ("I only swallow expenses -- no amount+currency in that.\n"
                 "try: ate pizza 200 rupees   (" + LEDGER_HINT + ")")
-    expense = Expense(
-        amount=entry.amount,
-        currency=entry.currency,
-        category=coerce_category(entry.category),
-        category_source="llm" if entry.confidence == "llm" else "regex",
-        description=entry.description,
-        source="cli",
-    )
-    expense.id = store.add(expense)
-    return format_entry(expense)
+    if result.not_expense:
+        return "that looks like income/refund, not a spend -- nothing saved."
+    return "\n".join(format_entry(e) for e in result.expenses)
 
 
 def format_entry(entry: Expense) -> str:
@@ -102,15 +99,34 @@ def undo_last(store: Store) -> str:
 
 @app.command()
 def setup():
-    """First-time setup: saves GEMINI_API_KEY + GEMINI_MODEL to $SHREK_HOME/.env."""
+    """First-time setup: saves GEMINI_API_KEY + GEMINI_MODEL + default currency to $SHREK_HOME/.env."""
     config.wizard()
+
+
+@app.command()
+def currency(code: Optional[str] = typer.Argument(None, help="3-letter currency code, e.g. INR")):
+    """Show or change the default currency for amounts written without one."""
+    if code is None or code.strip() == "":
+        current = config.currency()
+        typer.echo(f"default currency: {current or 'INR (unset)'}")
+        return
+    value = code.strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", value):
+        typer.echo("shrek: send a three-letter currency code, e.g. shrek currency INR", err=True)
+        raise typer.Exit(code=1)
+    config.save_currency(value)
+    typer.echo(f"default currency: {value}")
 
 
 @app.command()
 def add(text: str):
     """Swallow one expense line: shrek add "ate pizza 200 rupees" """
     store = default_store()
-    typer.echo(swallow(text, store, current_key(), config.model()))
+    default_currency = (
+        config.ensure_currency() if needs_default_currency(text)
+        else (config.currency() or "INR")
+    )
+    typer.echo(swallow(text, store, current_key(), config.model(), default_currency))
     typer.echo("total: " + format_totals(store.total()))
 
 
@@ -197,7 +213,8 @@ def model(
 
 # ---- REPL ----------------------------------------------------------------
 
-def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str]) -> str:
+def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str],
+                default_currency: str = "INR") -> str:
     word = line.strip().lower()
     if word in ("exit", "quit", "q"):
         return "burp. bye."
@@ -205,7 +222,8 @@ def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str]
         return "...waiting for expenses. (help | exit)"
     if word == "help":
         return ("type expenses like: ate pizza 200 rupees\n"
-                "in-session: list | total | undo | organize | categories | exit")
+                "in-session: list | total | undo | organize | categories | "
+                "currency <code> | exit")
     if word == "list":
         return format_list(store.list(limit=10))
     if word == "total":
@@ -216,13 +234,23 @@ def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str]
         return format_organize_report(run_organize(store, key=key, model=model))
     if word.startswith("categories"):
         return LEDGER_HINT
-    return swallow(line, store, key, model)
+    if word.startswith("currency"):
+        parts = line.split()
+        if len(parts) == 1:
+            return f"default currency: {config.currency() or 'INR (unset)'}"
+        value = parts[1].strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            return "shrek: send a three-letter currency code, e.g. currency INR"
+        config.save_currency(value)
+        return f"default currency: {value}"
+    return swallow(line, store, key, model, default_currency)
 
 
 def repl() -> None:
     store = default_store()
     key = current_key()
     model = config.model() if key else None
+    default_currency = config.ensure_currency()
     typer.echo("shrek is listening. type expenses ('ate pizza 200 rupees'), 'help', or 'exit'.")
     while True:
         try:
@@ -232,7 +260,7 @@ def repl() -> None:
             return
         if not line:
             continue
-        out = _repl_line(line, store, key, model)
+        out = _repl_line(line, store, key, model, default_currency)
         typer.echo(out)
         if line.strip().lower() in ("exit", "quit", "q"):
             return
