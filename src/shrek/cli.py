@@ -11,7 +11,8 @@ from typing import Optional
 import typer
 
 import shrek.config as config
-from shrek.models import CATEGORIES, Expense, fmt_amount
+from shrek.models import CATEGORIES, UNCATEGORIZED, Expense, fmt_amount
+from shrek.organize import OrganizeReport, organize as run_organize
 from shrek.parser import parse
 from shrek.store import Store
 
@@ -43,7 +44,8 @@ def swallow(text: str, store: Store, key: Optional[str], model: Optional[str] = 
     expense = Expense(
         amount=entry.amount,
         currency=entry.currency,
-        category=entry.category or "other",
+        category=entry.category or UNCATEGORIZED,
+        category_source="llm" if entry.confidence == "llm" else "regex",
         description=entry.description,
         source="cli",
     )
@@ -69,6 +71,23 @@ def format_list(rows: list[Expense]) -> str:
         f"{r.id}. [{r.category}] {r.currency} {fmt_amount(r.amount)} -- {r.description or '(unnamed)'}"
         for r in rows
     )
+
+
+def format_organize_report(report: OrganizeReport) -> str:
+    if report.error:
+        return f"shrek: {report.error}"
+    if report.candidates == 0:
+        return "nothing to organize -- no miscellaneous expenses."
+    verb = "organized" if report.applied else "would organize"
+    lines = [
+        f"{verb} {len(report.changes)} of {report.candidates} miscellaneous expense(s)"
+    ]
+    for change in report.changes:
+        desc = f" -- {change.description}" if change.description else ""
+        lines.append(f"  {change.id}. {change.old} -> {change.new}{desc}")
+    if not report.changes:
+        lines.append("  nothing changed.")
+    return "\n".join(lines)
 
 
 def undo_last(store: Store) -> str:
@@ -136,6 +155,23 @@ def undo():
 
 
 @app.command()
+def organize(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview the changes without writing."
+    ),
+):
+    """Re-categorize every miscellaneous expense in one Gemini request."""
+    key = current_key()
+    report = run_organize(
+        default_store(),
+        key=key,
+        model=config.model() if key else None,
+        dry_run=dry_run,
+    )
+    typer.echo(format_organize_report(report))
+
+
+@app.command()
 def model(
     name: Optional[str] = typer.Argument(None, help="Gemini model id, e.g. gemini-3.8-flash"),
 ):
@@ -167,13 +203,15 @@ def _repl_line(line: str, store: Store, key: Optional[str], model: Optional[str]
         return "...waiting for expenses. (help | exit)"
     if word == "help":
         return ("type expenses like: ate pizza 200 rupees\n"
-                "in-session: list | total | undo | categories | exit")
+                "in-session: list | total | undo | organize | categories | exit")
     if word == "list":
         return format_list(store.list(limit=10))
     if word == "total":
         return format_totals(store.total())
     if word == "undo":
         return undo_last(store)
+    if word == "organize":
+        return format_organize_report(run_organize(store, key=key, model=model))
     if word.startswith("categories"):
         return LEDGER_HINT
     return swallow(line, store, key, model)
