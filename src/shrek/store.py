@@ -48,6 +48,27 @@ class Store:
         self.db_path = str(db_path)
         self.engine = create_engine(f"sqlite:///{self.db_path}")
         SQLModel.metadata.create_all(self.engine)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """One-time v0 -> v1: add provenance, delete legacy 'other' rows.
+
+        Gated by PRAGMA user_version so rows labelled 'other' after the
+        upgrade are never deleted. create_all cannot add columns to an
+        existing table, hence the explicit ALTER.
+        """
+        with self.engine.begin() as conn:
+            version = int(conn.exec_driver_sql("PRAGMA user_version").scalar() or 0)
+            if version >= 1:
+                return
+            cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(expense)")}
+            if "category_source" not in cols:
+                conn.exec_driver_sql(
+                    "ALTER TABLE expense ADD COLUMN category_source "
+                    "VARCHAR NOT NULL DEFAULT 'unknown'"
+                )
+            conn.exec_driver_sql("DELETE FROM expense WHERE category = 'other'")
+            conn.exec_driver_sql("PRAGMA user_version = 1")
 
     # -- writes ---------------------------------------------------------
 
@@ -116,7 +137,12 @@ class Store:
             rows = session.exec(stmt).all()
         return {currency: round(float(total), 2) for currency, total in sorted(rows)}
 
-    def update_category(self, expense_id: int, category: str) -> Optional[Expense]:
+    def update_category(
+        self,
+        expense_id: int,
+        category: str,
+        source: Optional[str] = None,
+    ) -> Optional[Expense]:
         """Re-chew one row's category in place: id, timestamp and currency
         untouched (moving a 3-day-old row must not move its date)."""
         if expense_id is None:
@@ -127,6 +153,8 @@ class Store:
             if row is None:
                 return None
             row.category = category
+            if source is not None:
+                row.category_source = source
             session.add(row)
             session.commit()
             session.refresh(row)

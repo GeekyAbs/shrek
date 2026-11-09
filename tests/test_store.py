@@ -1,5 +1,6 @@
 """Tests for the SQLModel ledger store. Scope: exhaustive, real DB."""
 
+import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
@@ -153,6 +154,63 @@ def test_add_persists_across_store_instances(tmp_path):
     eid = s1.add(mk(amount=123.45))
     s2 = Store(path)
     assert s2.get(eid).amount == 123.45
+
+
+def _make_legacy_db(path):
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE expense ("
+        "id INTEGER PRIMARY KEY, ts DATETIME, amount FLOAT NOT NULL, "
+        "currency VARCHAR NOT NULL, category VARCHAR NOT NULL, "
+        "description VARCHAR NOT NULL, source VARCHAR NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO expense (ts, amount, currency, category, description, source) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (NOW.isoformat(sep=" "), 100.0, "INR", "other", "mystery", "cli"),
+    )
+    conn.execute(
+        "INSERT INTO expense (ts, amount, currency, category, description, source) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (NOW.isoformat(sep=" "), 250.0, "INR", "food", "pizza", "cli"),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_update_category_records_source(store):
+    eid = store.add(mk())
+    row = store.update_category(eid, "bills", source="manual")
+    assert row.category_source == "manual"
+
+
+def test_update_category_without_source_preserves_it(store):
+    eid = store.add(mk())
+    store.update_category(eid, "bills", source="manual")
+    row = store.update_category(eid, "food")
+    assert row.category_source == "manual"
+
+
+def test_migration_adds_column_deletes_legacy_other_and_bumps_version(tmp_path):
+    path = tmp_path / "ledger.db"
+    _make_legacy_db(path)
+    store = Store(path)
+    assert sqlite3.connect(path).execute(
+        "SELECT COUNT(*) FROM expense WHERE category = 'other'").fetchone()[0] == 0
+    assert [r.description for r in store.list()] == ["pizza"]
+    with store.engine.connect() as conn:
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar() == 1
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(expense)")}
+    assert "category_source" in cols
+
+
+def test_migration_is_idempotent_and_future_other_rows_survive(tmp_path):
+    path = tmp_path / "ledger.db"
+    _make_legacy_db(path)
+    Store(path)
+    second = Store(path)
+    eid = second.add(mk(category="other", description="deliberate"))
+    assert second.get(eid).category == "other"
 
 
 def test_total_sums_in_sql_not_python(store):
