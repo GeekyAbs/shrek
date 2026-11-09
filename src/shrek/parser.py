@@ -124,3 +124,24 @@ def parse_regex(text: str) -> Optional[ParsedEntry]:
         )
     except Exception:  # brief requirement: bad input never crashes
         return None
+
+
+def parse(
+    text: str,
+    key: "str | None" = None,
+    model: "str | None" = None,
+) -> "ParsedEntry | None":
+    """Two-layer brain: Gemini when a key exists (smart, messy lines),
+    deterministic regex otherwise (offline, quota, no key). None on both —
+    callers show a friendly 'I did not get that' message; nothing raises."""
+    entry = None
+    if key:
+        from shrek import llm
+
+        entry = llm.parse_expense(text, key=key, model=model or "gemini-2.5-flash")
+    if entry is None:
+        fallback = parse_regex(text)
+        if fallback is not None and key:
+            fallback.confidence = "fallback"
+        entry = entry or fallback
+    return entry
