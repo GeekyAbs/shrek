@@ -2,7 +2,13 @@
 
 import pytest
 
-from shrek.parser import ParsedEntry, parse, parse_regex
+from shrek.parser import (
+    ParsedEntry,
+    needs_default_currency,
+    parse,
+    parse_many,
+    parse_regex,
+)
 
 
 # --- the canonical happy paths ------------------------------------------
@@ -221,3 +227,47 @@ def test_bare_number_guards(text):
 
 def test_bare_number_needs_a_letter():
     assert parse_regex("50") is None
+
+
+# --- multi-entry splitting and the refund guard --------------------------
+
+def test_parse_many_splits_commas_semicolons_newlines_and():
+    result = parse_many(
+        "20 for rickshaw, 10 for bus; 30 for train\n40 for auto and 50 for tea"
+    )
+    assert [e.amount for e in result.entries] == [20, 10, 30, 40, 50]
+
+
+def test_parse_many_keeps_number_commas_whole():
+    result = parse_many("shoes 2,450 rupees, milk 12,50 EUR")
+    assert [e.amount for e in result.entries] == [2450.0, 12.5]
+
+
+def test_and_without_a_second_amount_stays_one_segment():
+    result = parse_many("bread and milk 100 rupees")
+    assert len(result.entries) == 1
+    assert result.entries[0].amount == 100.0
+
+
+def test_refund_segment_is_skipped():
+    result = parse_many("20 for rickshaw, refund 100")
+    assert [e.amount for e in result.entries] == [20.0]
+    assert result.skipped == 1
+
+
+@pytest.mark.parametrize("text", [
+    "got a refund 200 rupees",
+    "salary 50000",
+    "cashback 30",
+    "received 500",
+])
+def test_refund_only_lines_are_skipped(text):
+    result = parse_many(text)
+    assert result.entries == [] and result.skipped == 1
+
+
+def test_needs_default_currency():
+    assert needs_default_currency("rickshaw 50")
+    assert needs_default_currency("20 for rickshaw")
+    assert not needs_default_currency("pizza 200 rupees")
+    assert not needs_default_currency("hello there")

@@ -210,6 +210,86 @@ def parse_regex(
         return None
 
 
+#: Segments with these words are income/refund, never a debit the regex writes.
+INCOME_WORDS = re.compile(
+    r"\b(refund(?:ed)?|received|credited|cashback|salary|income(?!\s+tax)|reimbursed?)\b",
+    re.IGNORECASE,
+)
+#: Top-level separators: a comma between digits is never a split (`2,450`).
+_SEGMENT_SPLIT = re.compile(r"[;\n]+|,(?!\d)")
+_AND_SPLIT = re.compile(r"\s+\band\b\s+", re.IGNORECASE)
+
+
+@dataclass
+class ManyResult:
+    """Every entry one message produced, plus how many refund-ish segments
+    the regex deliberately left for the LLM."""
+
+    entries: list[ParsedEntry] = field(default_factory=list)
+    skipped: int = 0
+
+
+def _split_and(piece: str, default_currency: str) -> list[str]:
+    """Split on `and` only when both sides carry an amount of their own."""
+    for m in _AND_SPLIT.finditer(piece):
+        left, right = piece[: m.start()], piece[m.end():]
+        if (parse_regex(left, default_currency) is not None
+                and parse_regex(right, default_currency) is not None):
+            return (
+                _split_and(left, default_currency)
+                + _split_and(right, default_currency)
+            )
+    return [piece]
+
+
+def _split_segments(text: str, default_currency: str) -> list[str]:
+    pieces: list[str] = []
+    for raw in _SEGMENT_SPLIT.split(text):
+        if raw.strip():
+            pieces.extend(_split_and(raw, default_currency))
+    return [p.strip() for p in pieces if p.strip()]
+
+
+def parse_many(
+    text: str, default_currency: str = "INR"
+) -> ManyResult:
+    """Split a message into expenses. Refund/income segments are skipped (the
+    LLM may still judge them); bad input yields whatever was collected."""
+    result = ManyResult()
+    try:
+        if not text or not text.strip():
+            return result
+        for segment in _split_segments(text, default_currency):
+            if INCOME_WORDS.search(segment):
+                result.skipped += 1
+                continue
+            entry = parse_regex(segment, default_currency)
+            if entry is not None:
+                result.entries.append(entry)
+        return result
+    except Exception:  # brief requirement: bad input never crashes
+        return result
+
+
+def needs_default_currency(text: str) -> bool:
+    """True when the line has a bare amount and no explicit currency token,
+    i.e. the CLI should ask for (or apply) a default currency."""
+    try:
+        if not text or not text.strip():
+            return False
+        if _first_hit(text) is not None:
+            return False
+        if _bare_hit(text) is not None:
+            return True
+        return any(
+            _bare_hit(piece) is not None
+            for piece in _SEGMENT_SPLIT.split(text)
+            if piece.strip()
+        )
+    except Exception:
+        return False
+
+
 def parse(
     text: str,
     key: "str | None" = None,
